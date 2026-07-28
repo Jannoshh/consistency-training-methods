@@ -111,6 +111,10 @@ class TinkerBackend:
 
     renderer_source = "tinker"
     policy_samplers_are_snapshots = True
+    # Tinker executes queued requests in order and recommends keeping one
+    # subsequent batch in flight. Training loops treat this as a backend
+    # capability rather than a scientific configuration parameter.
+    training_submit_ahead = 1
 
     def __init__(self, service_client: tinker.ServiceClient | None = None):
         self._service_client = service_client
@@ -126,9 +130,10 @@ class TinkerBackend:
             self._service_client = tinker.ServiceClient()
         return self._service_client
 
-    def setup(
-        self, *, model: str, lora: LoRAConfig, resume_from: str | None = None, resume_with_optimizer: bool = False
-    ) -> None:
+    @staticmethod
+    def _setup_kwargs(*, model: str, lora: LoRAConfig) -> dict[str, Any]:
+        """Validate Tinker's LoRA constraints and build client arguments."""
+
         if lora.target_modules is not None:
             raise NotImplementedError(
                 "Tinker exposes component-level LoRA selection only; exact target_modules are supported by LocalBackend"
@@ -137,16 +142,23 @@ class TinkerBackend:
             raise NotImplementedError("Tinker fixes LoRA alpha/r=2; use LocalBackend for an explicit non-default alpha")
         if lora.dropout != 0.0:
             raise NotImplementedError("Tinker does not expose LoRA dropout; use LocalBackend")
-        self.model = model
         user_metadata: dict[str, str] = {}
         checkpoint_utils.add_renderer_name_to_user_metadata(
             user_metadata,
             model_info.get_recommended_renderer_name(model),
         )
-        self.training_client = self.service_client.create_lora_training_client(
-            base_model=model,
-            user_metadata=user_metadata,
+        return {
+            "base_model": model,
+            "user_metadata": user_metadata,
             **lora.model_dump(include={"rank", "train_mlp", "train_attn", "train_unembed", "seed"}),
+        }
+
+    def setup(
+        self, *, model: str, lora: LoRAConfig, resume_from: str | None = None, resume_with_optimizer: bool = False
+    ) -> None:
+        self.model = model
+        self.training_client = self.service_client.create_lora_training_client(
+            **self._setup_kwargs(model=model, lora=lora)
         )
         if resume_from:
             if resume_with_optimizer:
@@ -155,6 +167,25 @@ class TinkerBackend:
             else:
                 print(f"Loading weights from: {resume_from}")
                 self.training_client.load_state(resume_from).result()
+            print("Checkpoint loaded successfully")
+
+    async def setup_async(
+        self, *, model: str, lora: LoRAConfig, resume_from: str | None = None, resume_with_optimizer: bool = False
+    ) -> None:
+        """Initialize through the SDK's native async path."""
+
+        self.model = model
+        self.training_client = await self.service_client.create_lora_training_client_async(
+            **self._setup_kwargs(model=model, lora=lora)
+        )
+        if resume_from:
+            if resume_with_optimizer:
+                print(f"Loading weights + optimizer from: {resume_from}")
+                future = await self.training_client.load_state_with_optimizer_async(resume_from)
+            else:
+                print(f"Loading weights from: {resume_from}")
+                future = await self.training_client.load_state_async(resume_from)
+            await future.result_async()
             print("Checkpoint loaded successfully")
 
     def _require_training_client(self) -> tinker.TrainingClient:

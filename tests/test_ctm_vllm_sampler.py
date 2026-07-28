@@ -47,6 +47,14 @@ class FakeEngine:
     def __init__(self, drop_logprob_for_token=None):
         self.calls = []
         self.drop = drop_logprob_for_token
+        self.sleep_calls = []
+        self.wake_calls = 0
+
+    def sleep(self, level=1):
+        self.sleep_calls.append(level)
+
+    def wake_up(self):
+        self.wake_calls += 1
 
     def generate(self, prompts, params, lora_request=None, use_tqdm=False):
         self.calls.append(SimpleNamespace(prompts=prompts, params=params, lora_request=lora_request))
@@ -63,8 +71,13 @@ class FakeEngine:
         return [SimpleNamespace(outputs=completions) for _ in prompts]
 
 
-def make_sampler(engine=None):
-    return VLLMSampler(model="some/base", engine=engine or FakeEngine(), api=fake_api())
+def make_sampler(engine=None, *, sleep=False):
+    return VLLMSampler(
+        model="some/base",
+        engine=engine or FakeEngine(),
+        api=fake_api(),
+        enable_sleep_mode=sleep,
+    )
 
 
 class TestVLLMSampler:
@@ -138,6 +151,21 @@ class TestVLLMSampler:
         assert seqs[0].logprobs is None  # token 8's logprob missing → whole seq excluded downstream
         assert seqs[1].logprobs == pytest.approx([-1.2])
 
+    def test_sleep_is_idempotent_and_sampling_wakes_engine(self):
+        engine = FakeEngine()
+        sampler = make_sampler(engine, sleep=True)
+        sampler.sleep()
+        sampler.sleep()
+        assert engine.sleep_calls == [1]
+        assert sampler.sleeping is True
+
+        sampler.sample([1], max_tokens=4, temperature=1.0, stop=[], num_samples=1, use_base=True)
+        assert engine.wake_calls == 1
+        assert sampler.sleeping is False
+
+        sampler.wake_up()
+        assert engine.wake_calls == 1
+
     def test_shutdown_releases_engine_and_is_idempotent(self):
         engine = FakeEngine()
         engine_ref = weakref.ref(engine)
@@ -153,7 +181,7 @@ class TestVLLMSampler:
 
 @pytest.mark.skipif(not HAS_PEFT, reason="peft not installed")
 class TestLocalBackendVLLMWiring:
-    def _backend(self, engine):
+    def _backend(self, engine, *, sleep=False):
         from transformers import GPT2Config, GPT2LMHeadModel
 
         torch.manual_seed(0)
@@ -163,7 +191,7 @@ class TestLocalBackendVLLMWiring:
             use_lora=True,
             model_instance=model,
             sampler="vllm",
-            vllm_options={"engine": engine, "api": fake_api()},
+            vllm_options={"engine": engine, "api": fake_api(), "enable_sleep_mode": sleep},
         )
         backend.setup(model="tiny-gpt2-test", lora=LoRAConfig(rank=2, seed=0))
         return backend
@@ -222,6 +250,31 @@ class TestLocalBackendVLLMWiring:
             )
         )
         assert engine.calls[-1].lora_request is None  # base = engine's frozen weights
+
+    def test_backend_sleeps_for_training_and_wakes_for_sampling(self, monkeypatch):
+        engine = FakeEngine()
+        backend = self._backend(engine, sleep=True)
+        policy = backend.policy_sampler("p")
+        cache_releases = []
+        monkeypatch.setattr(torch.cuda, "empty_cache", lambda: cache_releases.append(True))
+        backend.device = "cuda"
+
+        backend._sleep_vllm_for_training()
+        backend._sleep_vllm_for_training()
+        assert engine.sleep_calls == [1]
+
+        asyncio.run(
+            policy.sample(
+                types.ModelInput.from_ints(tokens=[1, 2]),
+                max_tokens=4,
+                temperature=1.0,
+                stop=[],
+                num_samples=1,
+            )
+        )
+        assert engine.wake_calls == 1
+        assert engine.calls
+        assert cache_releases == [True]
 
     def test_shutdown_releases_started_vllm(self):
         engine = FakeEngine()

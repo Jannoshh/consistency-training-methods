@@ -98,6 +98,7 @@ class FakeBackend:
         self.fb_loss_fns: list[str] = []
         self.optim_lrs: list[float] = []
         self.kl_calls = 0
+        self.refresh_calls = 0
         self.checkpoints: list[str] = []
         self.shutdown_calls = 0
 
@@ -111,6 +112,7 @@ class FakeBackend:
         return FakeSampler()
 
     async def refresh_policy_sampler(self, name):
+        self.refresh_calls += 1
         return FakeSampler()
 
     def base_sampler(self):
@@ -239,6 +241,7 @@ class TestRLEndToEnd:
         assert len(backend.fb_datums) == 2
         assert backend.fb_loss_fns == ["ppo", "ppo"]
         assert len(backend.optim_lrs) == 2
+        assert backend.refresh_calls == 2  # refresh_every=1 remains strict after actual updates
         assert backend.kl_calls == 2  # kl_coef > 0 routes through the backend
         assert backend.shutdown_calls == 1
         # real tinker datums with RL loss inputs
@@ -246,6 +249,21 @@ class TestRLEndToEnd:
         assert {"advantages", "logprobs", "mask", "target_tokens"} <= set(datum.loss_fn_inputs)
         advs = datum.loss_fn_inputs["advantages"].to_torch()
         assert advs.abs().sum() > 0
+
+    def test_refresh_waits_for_optimizer_when_accumulating(self, tmp_path):
+        _, backend, _, _ = self._run(
+            tmp_path,
+            loop=TrainingLoopConfig(
+                batch_size=1,
+                gradient_accumulation_steps=2,
+                refresh_policy_every_n_steps=1,
+                n_epochs=1,
+            ),
+        )
+
+        assert len(backend.fb_datums) == 4
+        assert len(backend.optim_lrs) == 2
+        assert backend.refresh_calls == 2
 
     def test_rollouts_persisted_with_context(self, tmp_path):
         _, _, trainer, _ = self._run(tmp_path)
@@ -299,6 +317,7 @@ class TestRLEndToEnd:
         )
 
         assert backend.fb_datums == []
+        assert backend.refresh_calls == 0  # unchanged weights do not need a new snapshot
         records = list(iter_rollouts(tmp_path / "rollouts"))
         assert len(records) == 64
         assert all(record.skipped_from_training for record in records)
@@ -360,6 +379,90 @@ class TestSFTEndToEnd:
         # SFT datums carry supervised loss inputs
         datum = backend.fb_datums[0][0]
         assert {"target_tokens", "weights"} <= set(datum.loss_fn_inputs)
+
+    def test_submit_ahead_queues_next_microbatch_before_waiting(self, tmp_path):
+        data = tmp_path / "train.jsonl"
+        samples = [
+            {"messages": [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}]}
+            for i in range(3)
+        ]
+        data.write_text("".join(json.dumps(sample) + "\n" for sample in samples))
+        events = []
+
+        class SubmitAheadBackend(FakeBackend):
+            training_submit_ahead = 1
+
+            async def submit_forward_backward(self, datums, loss_fn):
+                index = len(self.fb_datums)
+                events.append(("submit_fwd", index))
+                pending = await super().submit_forward_backward(datums, loss_fn)
+
+                class Pending:
+                    async def result(self):
+                        events.append(("wait_fwd", index))
+                        return await pending.result()
+
+                return Pending()
+
+        cfg = SFTConfig(
+            experiment_name="itest",
+            run_name="submit-ahead",
+            optimizer=AdamConfig(learning_rate=1e-4),
+            batch_size=1,
+            log_base_dir=str(tmp_path / "logs"),
+        )
+        with (
+            patch("ctm.training.sft.setup_logging") as mock_logging,
+            patch("ctm.training.sft.get_renderer_and_tokenizer", return_value=(FakeRenderer(), FakeTokenizer())),
+        ):
+            mock_logging.return_value = MagicMock()
+            asyncio.run(train_sft(data, config=cfg, backend=SubmitAheadBackend()))
+
+        assert events.index(("submit_fwd", 1)) < events.index(("wait_fwd", 0))
+        assert events.index(("submit_fwd", 2)) < events.index(("wait_fwd", 1))
+
+    def test_submit_ahead_stops_at_intermediate_checkpoint_boundary(self, tmp_path):
+        data = tmp_path / "train.jsonl"
+        samples = [
+            {"messages": [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}]}
+            for i in range(3)
+        ]
+        data.write_text("".join(json.dumps(sample) + "\n" for sample in samples))
+        events = []
+
+        class CheckpointingBackend(FakeBackend):
+            training_submit_ahead = 1
+
+            async def submit_forward_backward(self, datums, loss_fn):
+                events.append(("submit_fwd", len(self.fb_datums)))
+                return await super().submit_forward_backward(datums, loss_fn)
+
+            async def save_checkpoint(self, *, name, log_dir, loop_state, kind):
+                events.append(("checkpoint", loop_state["step"]))
+                return await super().save_checkpoint(
+                    name=name,
+                    log_dir=log_dir,
+                    loop_state=loop_state,
+                    kind=kind,
+                )
+
+        cfg = SFTConfig(
+            experiment_name="itest",
+            run_name="checkpoint-barrier",
+            optimizer=AdamConfig(learning_rate=1e-4),
+            checkpoint=CheckpointConfig(save_every_n_steps=1),
+            batch_size=1,
+            log_base_dir=str(tmp_path / "logs"),
+        )
+        with (
+            patch("ctm.training.sft.setup_logging") as mock_logging,
+            patch("ctm.training.sft.get_renderer_and_tokenizer", return_value=(FakeRenderer(), FakeTokenizer())),
+        ):
+            mock_logging.return_value = MagicMock()
+            asyncio.run(train_sft(data, config=cfg, backend=CheckpointingBackend()))
+
+        assert events.index(("checkpoint", 1)) < events.index(("submit_fwd", 1))
+        assert events.index(("checkpoint", 2)) < events.index(("submit_fwd", 2))
 
     def test_gradient_accumulation_groups_microbatches(self, tmp_path):
         data = tmp_path / "train.jsonl"

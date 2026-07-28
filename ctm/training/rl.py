@@ -1208,9 +1208,9 @@ class RLTrainer:
             async def _maybe_refresh_and_refill(i_batch: int, next_to_prefetch: int) -> int:
                 """Refresh the sampling client on schedule, flushing+awaiting stale prefetch.
 
-                Called on BOTH the normal and the empty-batch-skip path so a refresh that
-                falls on a skipped step is not dropped (which would extend off-policy
-                staleness). Reads the current global_step from the enclosing scope.
+                Called only after an optimizer update: refreshing when weights did not
+                change wastes a policy snapshot and can discard useful prefetched rollouts.
+                Reads the current global_step from the enclosing scope.
                 """
                 refresh_every = self.config.loop.refresh_policy_every_n_steps
                 if not (refresh_every and global_step % refresh_every == 0):
@@ -1371,8 +1371,7 @@ class RLTrainer:
                     await self._maybe_save_checkpoint(
                         global_step, total_steps, epoch, log_dir, checkpoint_paths, logger
                     )
-                    # Still honor the refresh schedule on a skipped step, then top up.
-                    next_to_prefetch = await _maybe_refresh_and_refill(i_batch, next_to_prefetch)
+                    # No optimizer ran, so the policy is unchanged; keep useful prefetch.
                     next_to_prefetch = _fill_prefetch_queue(next_to_prefetch)
                     continue
 
@@ -1410,7 +1409,9 @@ class RLTrainer:
                 # will refresh the policy (those rollouts would be sampled from the old
                 # weights and immediately discarded), saving wasted sampling.
                 refresh_every = self.config.loop.refresh_policy_every_n_steps
-                refresh_imminent = bool(refresh_every) and ((global_step + 1) % refresh_every == 0)
+                refresh_imminent = (
+                    pending_optim is not None and bool(refresh_every) and ((global_step + 1) % refresh_every == 0)
+                )
                 if not refresh_imminent:
                     next_to_prefetch = _fill_prefetch_queue(next_to_prefetch)
 
@@ -1451,9 +1452,9 @@ class RLTrainer:
                 )
                 self._log_rollouts(global_step, epoch)
 
-                # Refresh policy (also flushes+awaits stale prefetch). Shared with the
-                # empty-batch-skip path so a due refresh is never dropped.
-                next_to_prefetch = await _maybe_refresh_and_refill(i_batch, next_to_prefetch)
+                # Refresh only after a real optimizer update changed policy weights.
+                if pending_optim is not None:
+                    next_to_prefetch = await _maybe_refresh_and_refill(i_batch, next_to_prefetch)
 
                 # Intermediate checkpoint
                 await self._maybe_save_checkpoint(global_step, total_steps, epoch, log_dir, checkpoint_paths, logger)

@@ -34,8 +34,10 @@ import asyncio
 import json
 import math
 import random
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 from tqdm import tqdm
@@ -61,6 +63,18 @@ METHOD_LOSS_FNS = {
     "attct": "attention_consistency",
     "mlpct": "mlp_consistency",
 }
+
+
+@dataclass
+class _SubmittedMicrobatch:
+    microbatch_index: int
+    batch_samples: list[Any]
+    batch_data: list[Any]
+    current_lr: float
+    should_step: bool
+    optimizer_step: int
+    pending_fwd_bwd: Any
+    pending_optim: Any
 
 
 class SFTConfig(BaseModel):
@@ -207,9 +221,7 @@ async def train_sft(
     if cfg.gradient_accumulation_steps < 1:
         raise ValueError("gradient_accumulation_steps must be >= 1")
     microbatches_per_epoch = (n_samples + cfg.batch_size - 1) // cfg.batch_size
-    steps_per_epoch = (
-        microbatches_per_epoch + cfg.gradient_accumulation_steps - 1
-    ) // cfg.gradient_accumulation_steps
+    steps_per_epoch = (microbatches_per_epoch + cfg.gradient_accumulation_steps - 1) // cfg.gradient_accumulation_steps
     total_steps = steps_per_epoch * cfg.n_epochs
     if total_steps == 0:
         raise ValueError(
@@ -253,18 +265,25 @@ async def train_sft(
         else:
             with_opt = resume_with_optimizer
         print(f"Resuming from: {resume_from} (optimizer state: {with_opt})")
-    backend.setup(
-        model=cfg.model,
-        lora=cfg.lora,
-        resume_from=resume_from,
-        resume_with_optimizer=with_opt,
-    )
+    setup_kwargs = {
+        "model": cfg.model,
+        "lora": cfg.lora,
+        "resume_from": resume_from,
+        "resume_with_optimizer": with_opt,
+    }
+    setup_async = getattr(backend, "setup_async", None)
+    if setup_async is not None:
+        await setup_async(**setup_kwargs)
+    else:
+        backend.setup(**setup_kwargs)
     if resume_from:
         logger.log_hparams({"resume_from": resume_from, "resume_with_optimizer": with_opt})
 
     checkpoint_paths: list[str] = []
     global_step = 0
     global_microbatch = 0
+    submitted_optimizer_steps = 0
+    submit_ahead = min(1, max(0, int(getattr(backend, "training_submit_ahead", 0))))
     metric_key = "nll" if cfg.method == "bct" else "loss"
 
     # Training loop
@@ -276,8 +295,13 @@ async def train_sft(
         n_examples = 0
 
         batch_starts = list(range(0, n_samples, cfg.batch_size))
-        pbar = tqdm(batch_starts, desc=f"Epoch {epoch+1}")
-        for microbatch_index, batch_start in enumerate(pbar):
+        pbar = tqdm(total=len(batch_starts), desc=f"Epoch {epoch+1}")
+        pending: deque[_SubmittedMicrobatch] = deque()
+
+        async def _submit_microbatch(
+            microbatch_index: int, batch_start: int, *, epoch_samples=epoch_samples, batch_starts=batch_starts
+        ) -> _SubmittedMicrobatch:
+            nonlocal submitted_optimizer_steps
             batch_samples = epoch_samples[batch_start : batch_start + cfg.batch_size]
 
             if cfg.method == "bct":
@@ -296,15 +320,14 @@ async def train_sft(
                 0.0,
                 compute_schedule_lr_multiplier(
                     lr_schedule=cfg.optimizer.lr_schedule,
-                    step=global_step,
+                    step=submitted_optimizer_steps,
                     total_steps=total_steps,
                 ),
             )
             current_lr = base_lr * lr_mult
 
-            should_step = (
-                (microbatch_index + 1) % cfg.gradient_accumulation_steps == 0
-                or microbatch_index + 1 == len(batch_starts)
+            should_step = (microbatch_index + 1) % cfg.gradient_accumulation_steps == 0 or microbatch_index + 1 == len(
+                batch_starts
             )
 
             # The backend accumulates gradients across forward/backward calls.
@@ -315,45 +338,66 @@ async def train_sft(
             pending_optim = None
             if should_step:
                 pending_optim = await backend.submit_optim_step(learning_rate=current_lr, adam=cfg.optimizer)
+                submitted_optimizer_steps += 1
+
+            return _SubmittedMicrobatch(
+                microbatch_index=microbatch_index,
+                batch_samples=batch_samples,
+                batch_data=batch_data,
+                current_lr=current_lr,
+                should_step=should_step,
+                optimizer_step=submitted_optimizer_steps,
+                pending_fwd_bwd=pending_fwd_bwd,
+                pending_optim=pending_optim,
+            )
+
+        def _checkpoint_due(record: _SubmittedMicrobatch) -> bool:
+            every = cfg.checkpoint.save_every_n_steps
+            if not record.should_step or not every or record.optimizer_step % every != 0:
+                return False
+            return total_steps - record.optimizer_step > cfg.checkpoint.skip_near_final_steps
+
+        async def _finish_microbatch(record: _SubmittedMicrobatch, *, epoch=epoch, pbar=pbar) -> None:
+            nonlocal epoch_loss, n_examples, global_microbatch, global_step
 
             # Await results
-            fwd_bwd_output = await pending_fwd_bwd.result()
-            if pending_optim is not None:
-                await pending_optim.result()
+            fwd_bwd_output = await record.pending_fwd_bwd.result()
+            if record.pending_optim is not None:
+                await record.pending_optim.result()
 
             if cfg.method == "bct":
                 # Compute proper per-token NLL
-                weights = [d.loss_fn_inputs["weights"].to_torch() for d in batch_data]
+                weights = [d.loss_fn_inputs["weights"].to_torch() for d in record.batch_data]
                 batch_metric = _mean_nll(fwd_bwd_output.logprobs, weights)
             else:
                 batch_metric = fwd_bwd_output.metrics["loss"]
 
             # Weight each batch's (token-pooled) metric by its sample count so the epoch
             # mean isn't skewed by an unequal final/remainder batch.
-            epoch_loss += batch_metric * len(batch_samples)
-            n_examples += len(batch_samples)
+            epoch_loss += batch_metric * len(record.batch_samples)
+            n_examples += len(record.batch_samples)
             global_microbatch += 1
-            if should_step:
+            if record.should_step:
                 global_step += 1
 
             pbar.set_postfix(
                 {
                     metric_key: f"{batch_metric:.4f}",
-                    "lr": f"{current_lr:.2e}",
+                    "lr": f"{record.current_lr:.2e}",
                     "step": global_step,
                 }
             )
             logger.log_metrics(
                 {
                     f"train/{metric_key}": batch_metric,
-                    "train/lr": current_lr,
+                    "train/lr": record.current_lr,
                     "train/optimizer_step": global_step,
                 },
                 step=global_microbatch,
             )
 
             # Intermediate checkpoint (skip if near final to avoid duplicates)
-            if should_step:
+            if record.should_step:
                 await save_intermediate_checkpoint(
                     backend,
                     experiment_name=cfg.experiment_name,
@@ -366,6 +410,23 @@ async def train_sft(
                     checkpoint_paths=checkpoint_paths,
                     logger=logger,
                 )
+
+            pbar.update(1)
+
+        for microbatch_index, batch_start in enumerate(batch_starts):
+            # Do not queue work past a checkpoint: it must capture precisely the
+            # requested optimizer state before subsequent mutations are submitted.
+            if pending and _checkpoint_due(pending[-1]):
+                while pending:
+                    await _finish_microbatch(pending.popleft())
+
+            pending.append(await _submit_microbatch(microbatch_index, batch_start))
+            if len(pending) >= 1 + submit_ahead:
+                await _finish_microbatch(pending.popleft())
+
+        while pending:
+            await _finish_microbatch(pending.popleft())
+        pbar.close()
 
         # Epoch summary
         if n_examples > 0:

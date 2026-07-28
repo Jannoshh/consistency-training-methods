@@ -62,6 +62,8 @@ class VLLMSampler:
         """
         self._api = api if api is not None else _load_vllm_api()
         self.enable_lora = enable_lora
+        self.sleep_enabled = bool(engine_kwargs.get("enable_sleep_mode", False))
+        self.sleeping = False
         if engine is not None:
             self.engine = engine
         else:
@@ -72,6 +74,22 @@ class VLLMSampler:
         self.adapter_dir: Optional[str] = None
         self.adapter_version: int = 0
 
+    def sleep(self) -> None:
+        """Release vLLM GPU allocations while the colocated policy trains."""
+
+        if not self.sleep_enabled or self.sleeping or self.engine is None:
+            return
+        self.engine.sleep(level=1)
+        self.sleeping = True
+
+    def wake_up(self) -> None:
+        """Restore vLLM weights before generation."""
+
+        if not self.sleep_enabled or not self.sleeping or self.engine is None:
+            return
+        self.engine.wake_up()
+        self.sleeping = False
+
     def shutdown(self) -> None:
         """Release the vLLM engine and its worker process, if it was started."""
         if getattr(self, "engine", None) is None:
@@ -79,6 +97,7 @@ class VLLMSampler:
         # vLLM has no stable public shutdown method across supported versions;
         # dropping the final LLM reference tears down its EngineCore worker.
         self.engine = None
+        self.sleeping = False
         gc.collect()
 
     def advance_policy(self, adapter_dir: str) -> None:
@@ -127,6 +146,7 @@ class VLLMSampler:
         """Generate a scheduler-visible batch in one vLLM engine call."""
         if not prompt_tokens_batch:
             return []
+        self.wake_up()
         if self.engine is None:
             raise RuntimeError("vLLM sampler has been shut down")
         stop_ids = [t for t in (stop or []) if isinstance(t, int)] or None

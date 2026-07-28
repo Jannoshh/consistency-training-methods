@@ -82,6 +82,48 @@ async def step(backend, datums, loss_fn, lr=1e-2):
 
 
 class TestLocalSFT:
+    def test_gradient_checkpointing_is_enabled_during_setup(self):
+        model = tiny_model()
+        backend = LocalBackend(
+            device="cpu",
+            use_lora=False,
+            model_instance=model,
+            gradient_checkpointing=True,
+        )
+        backend.setup(model="tiny-gpt2-test", lora=LoRAConfig(rank=4))
+        assert model.is_gradient_checkpointing
+        assert model.config.use_cache is False
+
+    def test_microbatching_preserves_loss_logprobs_and_gradients(self):
+        datums = [sft_datum(), sft_datum(tokens=(9, 8, 7, 6, 5))]
+        unbounded = make_backend()
+        bounded = LocalBackend(
+            device="cpu",
+            use_lora=False,
+            model_instance=tiny_model(),
+            training_microbatch_size=1,
+        )
+        bounded.setup(model="tiny-gpt2-test", lora=LoRAConfig(rank=4))
+        for model in (unbounded.model, bounded.model):
+            for module in model.modules():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = 0.0
+
+        async def forward(backend):
+            return await (await backend.submit_forward_backward(datums, "cross_entropy")).result()
+
+        unbounded_out = asyncio.run(forward(unbounded))
+        bounded_out = asyncio.run(forward(bounded))
+
+        assert bounded_out.metrics["loss"] == pytest.approx(unbounded_out.metrics["loss"], rel=1e-6)
+        for bounded_lp, unbounded_lp in zip(bounded_out.logprobs, unbounded_out.logprobs):
+            torch.testing.assert_close(bounded_lp, unbounded_lp)
+        for bounded_parameter, unbounded_parameter in zip(bounded.model.parameters(), unbounded.model.parameters()):
+            if unbounded_parameter.grad is None:
+                assert bounded_parameter.grad is None
+            else:
+                torch.testing.assert_close(bounded_parameter.grad, unbounded_parameter.grad, rtol=1e-5, atol=1e-7)
+
     def test_cross_entropy_loss_decreases(self):
         backend = make_backend()
         datums = [sft_datum(), sft_datum(tokens=(9, 8, 7, 6, 5))]

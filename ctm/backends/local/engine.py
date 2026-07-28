@@ -274,6 +274,8 @@ class LocalBackend:
         consistency_loss_options: dict | None = None,
         full_finetune_modules: Sequence[str] | None = None,
         keep_frozen_base: bool = False,
+        training_microbatch_size: int | None = None,
+        gradient_checkpointing: bool = False,
     ):
         """
         Args:
@@ -296,6 +298,11 @@ class LocalBackend:
                 train when ``use_lora=False``. ``None`` trains every parameter.
             keep_frozen_base: retain an immutable copy of the initial model for
                 clean/reference forwards during selective full fine-tuning.
+            training_microbatch_size: maximum number of sequences in one
+                physical training forward/backward; ``None`` uses the full
+                logical batch.
+            gradient_checkpointing: recompute transformer blocks during
+                backward to reduce peak training memory.
         """
         if sampler not in ("hf", "vllm"):
             raise ValueError(f"Unknown sampler: {sampler!r} (expected 'hf' or 'vllm')")
@@ -310,6 +317,10 @@ class LocalBackend:
         self.consistency_loss_options = consistency_loss_options or {}
         self.full_finetune_modules = list(full_finetune_modules) if full_finetune_modules is not None else None
         self.keep_frozen_base = keep_frozen_base
+        if training_microbatch_size is not None and training_microbatch_size < 1:
+            raise ValueError("training_microbatch_size must be positive")
+        self.training_microbatch_size = training_microbatch_size
+        self.gradient_checkpointing = gradient_checkpointing
         self._vllm = None  # VLLMSampler, booted lazily by _ensure_vllm() when sampler == "vllm"
         self._adapter_scratch: Path | None = None
         self._optimizer: torch.optim.AdamW | None = None
@@ -331,6 +342,12 @@ class LocalBackend:
             from transformers import AutoModelForCausalLM
 
             self.model = AutoModelForCausalLM.from_pretrained(model, torch_dtype=self.dtype)
+        if self.gradient_checkpointing:
+            if not hasattr(self.model, "gradient_checkpointing_enable"):
+                raise NotImplementedError(f"model {type(self.model).__name__} does not support gradient checkpointing")
+            self.model.gradient_checkpointing_enable()
+            if hasattr(self.model, "config"):
+                self.model.config.use_cache = False
         if self.use_lora:
             if self.full_finetune_modules is not None:
                 raise ValueError("full_finetune_modules applies only when use_lora=False")
@@ -403,6 +420,23 @@ class LocalBackend:
         self._adapter_scratch = Path(tempfile.mkdtemp(prefix="ctm-policy-adapter-"))
         self._vllm = VLLMSampler(model=self.model_name, enable_lora=True, **self.vllm_options)
         self._publish_adapter()  # initial policy (fresh or resumed adapter)
+
+    def _sleep_vllm_for_training(self) -> None:
+        """Offload a colocated vLLM engine before torch training work."""
+
+        if self._vllm is not None:
+            self._vllm.sleep()
+
+    def _wake_vllm_for_sampling(self) -> None:
+        """Restore a sleeping vLLM engine immediately before generation."""
+
+        if self._vllm is None or not self._vllm.sleeping:
+            return
+        # Backward can leave large unused blocks in torch's CUDA allocator.
+        # Release them before vLLM restores its weights and KV cache.
+        if str(self.device).startswith("cuda"):
+            torch.cuda.empty_cache()
+        self._vllm.wake_up()
 
     def shutdown(self) -> None:
         """Release the lazily started vLLM sampler, if any."""
@@ -492,6 +526,7 @@ class LocalBackend:
     ) -> list[list[SampledSequence]]:
         """Route a prompt batch to one vLLM/HF generation call."""
         if self._vllm is not None:
+            self._wake_vllm_for_sampling()
             return self._vllm.sample_batch(
                 [list(tokens) for tokens in prompt_tokens_batch],
                 max_tokens=max_tokens,
@@ -609,8 +644,8 @@ class LocalBackend:
 
     # ── training ─────────────────────────────────────────────────────────
 
-    def _target_logprobs(self, datums: Sequence[Any], use_base: bool = False) -> list[torch.Tensor]:
-        """Forward the batch and gather per-token logprobs of each datum's target_tokens."""
+    def _target_logprobs_batch(self, datums: Sequence[Any], use_base: bool = False) -> list[torch.Tensor]:
+        """Forward one physical batch and gather each datum's target-token logprobs."""
         model = self._model_for(use_base=use_base)
         token_lists = [d.model_input.to_ints() for d in datums]
         max_len = max(len(t) for t in token_lists)
@@ -630,33 +665,65 @@ class LocalBackend:
             out.append(logprobs[i, :n].gather(1, targets.unsqueeze(1)).squeeze(1))
         return out
 
+    def _microbatches(self, datums: Sequence[Any]) -> list[Sequence[Any]]:
+        size = self.training_microbatch_size or len(datums)
+        return [datums[start : start + size] for start in range(0, len(datums), size)]
+
+    def _target_logprobs(self, datums: Sequence[Any], use_base: bool = False) -> list[torch.Tensor]:
+        """Forward datums in bounded physical batches and preserve their order."""
+        return [
+            logprobs
+            for microbatch in self._microbatches(datums)
+            for logprobs in self._target_logprobs_batch(microbatch, use_base=use_base)
+        ]
+
+    @staticmethod
+    def _loss_denominator(datums: Sequence[Any], loss_fn: str) -> float:
+        field = "weights" if loss_fn == "cross_entropy" else "mask"
+        return sum(float(d.loss_fn_inputs[field].to_torch().float().sum()) for d in datums)
+
     async def submit_forward_backward(self, datums: Sequence[Any], loss_fn: str) -> _ResolvedPending:
+        self._sleep_vllm_for_training()
         if loss_fn in CONSISTENCY_LOSS_CLASSES:
             return self._consistency_forward_backward(datums, loss_fn)
         model = self._require_model()
         model.train()
-        target_logprobs = self._target_logprobs(datums)
-
-        if loss_fn == "cross_entropy":
-            weights = [d.loss_fn_inputs["weights"].to_torch().to(self.device) for d in datums]
-            loss = losses.cross_entropy_loss(target_logprobs, weights)
-        elif loss_fn in ("ppo", "importance_sampling"):
-            sampled = [d.loss_fn_inputs["logprobs"].to_torch().to(self.device) for d in datums]
-            advs = [d.loss_fn_inputs["advantages"].to_torch().to(self.device) for d in datums]
-            masks = [d.loss_fn_inputs["mask"].to_torch().float().to(self.device) for d in datums]
-            if loss_fn == "ppo":
-                loss = losses.ppo_loss(target_logprobs, sampled, advs, masks, clip_epsilon=self.ppo_clip_epsilon)
-            else:
-                loss = losses.importance_sampling_loss(target_logprobs, sampled, advs, masks)
-        else:
+        if loss_fn not in ("cross_entropy", "ppo", "importance_sampling"):
             raise ValueError(f"Unknown loss_fn: {loss_fn}")
 
-        loss.backward()  # accumulate; optim_step applies + zeroes
+        total_denominator = self._loss_denominator(datums, loss_fn)
+        reported_logprobs: list[torch.Tensor] = []
+        reported_loss = 0.0
+        for microbatch in self._microbatches(datums):
+            target_logprobs = self._target_logprobs_batch(microbatch)
+            if loss_fn == "cross_entropy":
+                weights = [d.loss_fn_inputs["weights"].to_torch().to(self.device) for d in microbatch]
+                microbatch_loss = losses.cross_entropy_loss(target_logprobs, weights)
+            else:
+                sampled = [d.loss_fn_inputs["logprobs"].to_torch().to(self.device) for d in microbatch]
+                advs = [d.loss_fn_inputs["advantages"].to_torch().to(self.device) for d in microbatch]
+                masks = [d.loss_fn_inputs["mask"].to_torch().float().to(self.device) for d in microbatch]
+                if loss_fn == "ppo":
+                    microbatch_loss = losses.ppo_loss(
+                        target_logprobs,
+                        sampled,
+                        advs,
+                        masks,
+                        clip_epsilon=self.ppo_clip_epsilon,
+                    )
+                else:
+                    microbatch_loss = losses.importance_sampling_loss(target_logprobs, sampled, advs, masks)
+            scale = self._loss_denominator(microbatch, loss_fn) / max(total_denominator, 1e-8)
+            scaled_loss = microbatch_loss * scale
+            scaled_loss.backward()  # accumulate; optim_step applies + zeroes
+            reported_logprobs.extend(lp.detach().cpu() for lp in target_logprobs)
+            reported_loss += float(scaled_loss.detach())
+
         self._gradient_accumulations += 1
         return _ResolvedPending(
             ForwardBackwardOutput(
-                logprobs=[lp.detach().cpu() for lp in target_logprobs],
-                metrics={"loss": float(loss.detach())},
+                logprobs=reported_logprobs,
+                metrics={"loss": reported_loss},
             )
         )
 
@@ -791,6 +858,7 @@ class LocalBackend:
         import tinker
 
         self._require_base()
+        self._sleep_vllm_for_training()
         with torch.no_grad():
             base_logprobs = self._target_logprobs(datums, use_base=True)
 
