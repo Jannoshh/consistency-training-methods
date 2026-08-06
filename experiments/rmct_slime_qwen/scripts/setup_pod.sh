@@ -23,6 +23,9 @@ SLIME_DIR=${SLIME_DIR:?no framework dir found (looked for train.py in /root/mile
 # 0. Preflight (dev tier: single GPU, no NVLink requirement).
 bash "${RMCT_DIR}/preflight.sh" --dev
 
+# 0b. Local patches for known Miles/Megatron bugs (idempotent; see file).
+python3 "${RMCT_DIR}/scripts/apply_patches.py"
+
 # 1. Python deps the slime image lacks: the pinned mcq-bias package (answer
 #    parser — must match the repo's requirements.txt pin exactly) and zstd.
 MCQ_BIAS_PIN=$(grep -E "mcq[-_]bias" "${RMCT_DIR}/requirements-pin.txt")

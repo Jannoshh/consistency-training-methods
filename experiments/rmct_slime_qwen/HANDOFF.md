@@ -91,8 +91,16 @@ this alongside `phase0_report.md` (deviation table D1–D12) and `README.md`
 3. **NEW Miles bug (blocks long runs)**: distributed checkpoint save at
    TP2×DP2 fails validation ("rank args Namespace mismatch"). Benchmarks use
    NOSAVE=1; science runs need checkpoint_every=8, so fix/workaround first.
-4. **LoRA arm**: wait for/nudge upstream on the bshd+GDN actor-forward bug,
-   or accept full-param (parity-verified everywhere).
+4. **LoRA arm (the arm the user wants): definitively blocked upstream.**
+   Probe evidence (2026-08-06, `upstream_issues.md` #1): under the only
+   runnable LoRA config (bshd), the Megatron actor forward returns UNIFORM
+   logits (every logprob = -log(vocab) = -12.422) — the dense-Qwen3.5 LoRA
+   model path is non-functional, not merely drifted. thd is hard-rejected
+   for LoRA ("GDN does not support packed sequence"), and full-param+bshd
+   asserts. Options: file the drafted issues + track upstream (dense GDN
+   fixes are actively landing there), authorize a deeper self-patch effort
+   (uncertain, deep Megatron surgery), or run science on the parity-verified
+   full-param arm meanwhile.
 5. **Phase 5 remaining**: async rollout/training overlap (targets the 150s
    generation wait per step), tail elimination of p99 stragglers.
 6. **Phase 6**: object-storage checkpoint sync, restart.sh drill on Miles.

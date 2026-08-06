@@ -64,10 +64,16 @@ CKPT_ARGS=(
    "${START_ARGS[@]}"
 )
 if [ "${NOSAVE:-0}" != "1" ]; then
-   # NOSAVE=1 for benchmark/diagnostic runs: skips checkpointing entirely,
-   # incl. the end-of-run save (which currently crashes at TP2xDP2 with a
-   # rank-args mismatch in Miles' distributed-checkpoint validation).
+   # NOSAVE=1 for benchmark/diagnostic runs: skips checkpointing entirely.
    CKPT_ARGS+=(--save "${RUN_DIR}/checkpoints" --save-interval "${SAVE_INTERVAL:-8}")
+   # EVAL_CKPT=1: weights-only checkpoints (no optimizer/rng state). LoRA
+   # runs already save only the ~90MB adapter; for full-param this cuts a
+   # 47GB (4B) / ~100GB (9B) save to just the weights — right for the
+   # paper's checkpoint_every=8 EVALUATION checkpoints. NOT resumable:
+   # pair with a rare full save when crash-resume matters.
+   if [ "${EVAL_CKPT:-0}" = "1" ]; then
+      CKPT_ARGS+=(--no-save-optim --no-save-rng)
+   fi
 fi
 
 LORA_ARGS=()
@@ -94,7 +100,10 @@ if [ "${LORA:-0}" = "1" ]; then
       --lora-dropout 0.0
       --target-modules "${TARGET_MODULES:-${DEFAULT_TARGETS}}"
       --megatron-to-hf-mode bridge
-      --qkv-format bshd
+      # Miles' 35B-A3B example mandates bshd for GDN+LoRA, but full-param
+      # trains correctly under thd on dense Qwen3.5 — QKV_FORMAT=thd tests
+      # whether LoRA can avoid the broken bshd actor-forward path entirely.
+      --qkv-format "${QKV_FORMAT:-bshd}"
       # Enables skip_base_sync: the frozen base is NEVER pushed to SGLang
       # (it already serves the pristine HF checkpoint; a CPU backup restores
       # it across colocate sleep/wake). Critical here because Miles' mbridge
@@ -141,8 +150,8 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
 )
-if [ "${LORA:-0}" = "1" ] || [ "${BSHD:-0}" = "1" ]; then
-   # bshd (required by GatedDeltaNet LoRA) forbids dynamic batching.
+if { [ "${LORA:-0}" = "1" ] && [ "${QKV_FORMAT:-bshd}" = "bshd" ]; } || [ "${BSHD:-0}" = "1" ]; then
+   # bshd forbids dynamic batching.
    PERF_ARGS+=(--micro-batch-size "${MICRO_BATCH:-1}")
 else
    PERF_ARGS+=(--use-dynamic-batch-size --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU:-24576}")
