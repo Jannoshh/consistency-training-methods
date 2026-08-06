@@ -62,9 +62,13 @@ CKPT_ARGS=(
    --ref-load "${MODEL_DIR}_torch_dist"     # frozen base = KL reference
    --load "${LOAD_DIR}"
    "${START_ARGS[@]}"
-   --save "${RUN_DIR}/checkpoints"
-   --save-interval "${SAVE_INTERVAL:-8}"
 )
+if [ "${NOSAVE:-0}" != "1" ]; then
+   # NOSAVE=1 for benchmark/diagnostic runs: skips checkpointing entirely,
+   # incl. the end-of-run save (which currently crashes at TP2xDP2 with a
+   # rank-args mismatch in Miles' distributed-checkpoint validation).
+   CKPT_ARGS+=(--save "${RUN_DIR}/checkpoints" --save-interval "${SAVE_INTERVAL:-8}")
+fi
 
 LORA_ARGS=()
 if [ "${LORA:-0}" = "1" ]; then
@@ -124,7 +128,10 @@ ROLLOUT_ARGS=(
    --n-samples-per-prompt "${N_SAMPLES:-128}"
    --rollout-max-response-len "${MAX_RESPONSE_LEN:-20480}"
    --rollout-temperature 1.0
-   --global-batch-size 1                    # one optimizer step per generation
+   # The rollout fn emits exactly rollout_batch x n_train samples per
+   # generation (skipped rollouts carry zero loss masks), so this is one
+   # optimizer step per generation and divisible by any DP size.
+   --global-batch-size "$(( ${ROLLOUT_BATCH:-4} * ${N_SAMPLES:-128} ))"
 )
 
 PERF_ARGS=(

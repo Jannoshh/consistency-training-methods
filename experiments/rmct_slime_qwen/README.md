@@ -125,3 +125,37 @@ the paper's 20,480 budget is genuinely needed (truncation → parse failure →
 biased p_hat). MTP is now moot for this workload (helps latency at small
 batch, not throughput at 128-way fan-out), which also dissolves the
 LoRA-vs-MTP serving conflict.
+
+## Phase 5 shakeout (2026-08-06, 4× H200, full-param 9B, real science shape)
+
+2-step runs at the exact paper shape (4 datapoints × 128+128 rollouts,
+max_new_tokens 20480, real wrong_argument data), TP2 × DP2 training + 4
+SGLang engines:
+
+| | bf16 | FP8 KV |
+|---|---|---|
+| warm step time | **234s** | 228s |
+| generation wait | 150s | 140s |
+| actor train | 55s | — |
+| Gate B abs_diff | **0.0117** | 0.0225 |
+| parse_rate | 0.998–1.000 | 0.998–1.000 |
+| bias gap | 0.21–0.29 | 0.23–0.25 |
+
+- **Gate B holds at 9B science scale** (0.0117 ≈ upstream's 0.011 reference).
+  Gate A replay of these records: 38/38.
+- **FP8 KV rejected for science runs**: doubles sampling↔training divergence
+  for ~3% wall-clock — the full loop is not KV-bandwidth-bound.
+- **Real-data parse_rate ≈ 1.0** — the low smoke parse rates were fixture
+  artifacts; at 20480 tokens virtually every rollout reaches an answer, so
+  ~all 512 samples per step carry gradient.
+- **Run-cost model (measured)**: 100 steps ≈ 6.5 h ≈ $120 on 4× H200
+  synchronous; ~$90 on 8 GPUs; async overlap (Phase 5 remainder) targets
+  the 150s generation wait, bounding step time near max(gen, train).
+- Batching redesign shipped in this shakeout: the rollout fn emits exactly
+  rollout_batch × n_train samples per generation (skipped rollouts get
+  zero loss masks = exact ctm skip semantics), `--global-batch-size` equals
+  that count — works at any DP size, retires the shared-rollout_id hack.
+- New Miles bug (Phase 6 blocker): end-of-run distributed checkpoint save
+  fails at TP2×DP2 ("rank args Namespace mismatch" in save validation);
+  benchmark runs use NOSAVE=1. Needs a fix or workaround before long runs
+  (checkpoint-every-8 is a science requirement).

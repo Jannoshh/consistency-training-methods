@@ -287,31 +287,6 @@ async def _generate_rollout_async(args: Namespace, rollout_id: int) -> "Any":
                     reward, advantage = candidate
                     skipped = not result.has_signal
                     skip_reason = "zero_advantage_batch" if skipped else None
-                    group.append(
-                        Sample(
-                            group_index=dp_idx,
-                            index=sample_index,
-                            # One shared rollout_id per generation: the DP
-                            # scheduler then sees exactly one rollout group per
-                            # step regardless of parse-failure count, giving
-                            # one optimizer step per generation (ctm's
-                            # structure) with --global-batch-size 1.
-                            rollout_id=rollout_id,
-                            prompt=state["tokenizer"].decode(prompt_ids[pert]),
-                            tokens=prompt_ids[pert] + rollout.tokens,
-                            response=rollout.text,
-                            response_length=len(rollout.tokens),
-                            rollout_log_probs=rollout.logprobs,
-                            loss_mask=[1] * len(rollout.tokens),
-                            reward=advantage,  # per-sample RMCT advantage (pre-KL)
-                            # ctm skips the optimizer on zero-signal batches;
-                            # slime has no skip channel, so loss-mask instead.
-                            remove_sample=skipped,
-                            status=Sample.Status.COMPLETED,
-                            metadata={"datapoint_idx": dp_idx, "perturbation_idx": pert, "step": step},
-                        )
-                    )
-                    sample_index += 1
                 else:
                     reward = advantage = None
                     skipped = True
@@ -321,6 +296,35 @@ async def _generate_rollout_async(args: Namespace, rollout_id: int) -> "Any":
                         skip_reason = "missing_logprobs"
                     else:
                         skip_reason = "rate_only"
+                # Every TRAINING-perturbation rollout becomes a Sample, so each
+                # generation yields exactly batch_size * n_train_rollouts
+                # samples and --global-batch-size equals that count (one
+                # optimizer step per generation, divisible by any DP size).
+                # Skipped rollouts (parse failure / zero-signal batch) carry an
+                # all-zero loss mask: zero policy gradient AND zero KL — exact
+                # ctm skip semantics without shrinking the batch. Reference
+                # (perturbation 0) rollouts never enter the trainer, as in ctm.
+                if pert != 0:
+                    trainable = candidate is not None and not skipped
+                    group.append(
+                        Sample(
+                            group_index=dp_idx,
+                            index=sample_index,
+                            rollout_id=rollout_id,
+                            prompt=state["tokenizer"].decode(prompt_ids[pert]),
+                            tokens=prompt_ids[pert] + rollout.tokens,
+                            response=rollout.text,
+                            response_length=len(rollout.tokens),
+                            rollout_log_probs=rollout.logprobs,
+                            loss_mask=[1 if trainable else 0] * len(rollout.tokens),
+                            reward=advantage if trainable else 0.0,
+                            remove_sample=False,
+                            status=Sample.Status.COMPLETED,
+                            metadata={"datapoint_idx": dp_idx, "perturbation_idx": pert, "step": step},
+                        )
+                    )
+                    if trainable:
+                        sample_index += 1
                 records.append(
                     {
                         "step": step,
@@ -347,33 +351,6 @@ async def _generate_rollout_async(args: Namespace, rollout_id: int) -> "Any":
         if group:
             groups.append(group)
 
-    if not any(not s.remove_sample for g in groups for s in g):
-        # ctm skips the optimizer step outright on zero-signal batches. An
-        # empty batch crashes Miles (postprocess_rollout_data indexes data[0]),
-        # so emit one zero-masked group instead: loss_mask all zero => zero
-        # policy gradient AND zero KL term — an exact no-op optimizer step.
-        fallback: list[Sample] = []
-        for dp_idx, datapoint, raw, prompt_ids in collected[:1]:
-            for pert, rollout_list in rollouts_by_dp[dp_idx].items():
-                for rollout in rollout_list[:4]:
-                    fallback.append(
-                        Sample(
-                            group_index=dp_idx,
-                            index=len(fallback),
-                            rollout_id=rollout_id,
-                            prompt=state["tokenizer"].decode(prompt_ids[pert]),
-                            tokens=prompt_ids[pert] + rollout.tokens,
-                            response=rollout.text,
-                            response_length=len(rollout.tokens),
-                            rollout_log_probs=rollout.logprobs,
-                            loss_mask=[0] * len(rollout.tokens),
-                            reward=0.0,
-                            remove_sample=False,
-                            status=Sample.Status.COMPLETED,
-                            metadata={"datapoint_idx": dp_idx, "perturbation_idx": pert, "step": step},
-                        )
-                    )
-        groups = [fallback] if fallback else groups
     state["writer"].write_step(step, records)
 
     n_total = sum(len(outs) for _, _, raw, _ in collected for outs in raw.values())
