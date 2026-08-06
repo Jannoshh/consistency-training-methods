@@ -1,0 +1,739 @@
++ export PYTHONUNBUFFERED=1
++ PYTHONUNBUFFERED=1
++ RMCT_DIR=/workspace/rmct
++ MODEL_DIR=/workspace/models/Qwen3.5-2B
++ RUN_DIR=/workspace/runs/dev_smoke
++ export RMCT_CONFIG=/workspace/rmct/configs/dev_smoke.json
++ RMCT_CONFIG=/workspace/rmct/configs/dev_smoke.json
++ PHASE=rollout
++ SLIME_DIR=/root/slime
++ pkill -9 sglang
++ true
++ sleep 2
++ ray stop --force
+Did not find any active Ray processes.
++ sleep 2
++ python3 /workspace/rmct/scripts/derive_model_args.py /workspace/models/Qwen3.5-2B
++ source /tmp/qwen3.5-2B-args.sh
+++ MODEL_ARGS=(--spec "slime_plugins.models.qwen3_5" "get_qwen3_5_spec" --disable-bias-linear --qk-layernorm --group-query-attention --num-attention-heads 8 --num-query-groups 2 --kv-channels 256 --num-layers 24 --hidden-size 2048 --ffn-hidden-size 6144 --use-gated-attention --normalization RMSNorm --apply-layernorm-1p --position-embedding-type rope --norm-epsilon 1e-06 --rotary-percent 0.25 --swiglu --vocab-size 248320 --rotary-base 10000000 --attention-output-gate)
++ CKPT_ARGS=(--hf-checkpoint "${MODEL_DIR}" --ref-load "${MODEL_DIR}_torch_dist" --load "${MODEL_DIR}_torch_dist" --save "${RUN_DIR}/checkpoints" --save-interval 2)
++ RMCT_ARGS=(--rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-advantage-function-path slime_port.rmct_advantage.compute_advantages --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --kl-coef 0.0)
++ ROLLOUT_ARGS=(--prompt-data "${RMCT_DIR}/data/dev_smoke/suggested-answer-pairs.jsonl" --input-key unbiased_messages --apply-chat-template --rollout-global-dataset --num-rollout 5 --rollout-batch-size 4 --n-samples-per-prompt 8 --rollout-max-response-len 1024 --rollout-temperature 1.0 --global-batch-size 32)
++ PERF_ARGS=(--tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 --use-dynamic-batch-size --max-tokens-per-gpu 8192)
++ OPTIMIZER_ARGS=(--optimizer adam --lr 1e-6 --lr-decay-style constant --weight-decay 0.1 --adam-beta1 0.9 --adam-beta2 0.95 --use-distributed-optimizer)
++ SGLANG_ARGS=(--rollout-num-gpus-per-engine 1 --sglang-mem-fraction-static 0.5 --sglang-mamba-radix-cache-strategy extra_buffer)
++ MISC_ARGS=(--attention-dropout 0.0 --hidden-dropout 0.0 --accumulate-allreduce-grads-in-fp32 --attention-softmax-in-fp32 --attention-backend flash --colocate)
++ case "${PHASE}" in
++ DEBUG_ARGS=(--debug-rollout-only --save-debug-rollout-data "${RUN_DIR}/debug/rollout_{rollout_id}.pt")
++ export MASTER_ADDR=127.0.0.1
++ MASTER_ADDR=127.0.0.1
++ ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats
+Usage stats collection is disabled.
+
+[37mLocal node IP[39m: [1m172.24.0.2[22m
+2026-08-05 23:02:12,169	WARNING utils.py:469 -- Detecting docker specified CPUs. In previous versions of Ray, CPU detection in containers was incorrect. Please ensure that Ray has enough CPUs allocated. As a temporary workaround to revert to the prior behavior, set `RAY_USE_MULTIPROCESSING_CPU_COUNT=1` as an env var before starting Ray. Set the env var: `RAY_DISABLE_DOCKER_CPU_WARNING=1` to mute this warning.
+2026-08-05 23:02:12,170	WARNING utils.py:481 -- Ray currently does not support initializing Ray with fractional cpus. Your num_cpus will be truncated from 6.8 to 6.
+
+[32m--------------------[39m
+[32mRay runtime started.[39m
+[32m--------------------[39m
+
+[36mNext steps[39m
+  [2mNote: The following commands are intended for use on[22m
+  [2mthe head node or within the cluster network.[22m
+  
+  To add another node to this Ray cluster, run
+  [1m  ray start --address='172.24.0.2:6379'[22m
+  
+  To connect to this Ray cluster:
+    [35mimport[39m[26m ray
+    ray[35m.[39m[26minit(_node_ip_address[35m=[39m[26m[33m'172.24.0.2'[39m[26m)
+  
+  To submit a Ray job using the Ray Jobs CLI:
+  [1m  RAY_API_SERVER_ADDRESS='http://127.0.0.1:8265' ray job submit --working-dir . -- python my_script.py[22m
+  
+  See https://docs.ray.io/en/latest/cluster/running-applications/job-submission/index.html 
+  for more information on submitting Ray jobs to the Ray cluster.
+  
+  To terminate the Ray runtime, run
+  [1m  ray stop[22m
+  
+  To view the status of the cluster, use
+    [1mray status[22m[26m
+  
+  To monitor and debug Ray, view the dashboard at 
+    [1m127.0.0.1:8265[22m[26m
+  
+  [4mIf connection to the dashboard fails, check your firewall settings and network configuration.[24m
++ RUNTIME_ENV_JSON='{
+  "env_vars": {
+    "PYTHONPATH": "/root/Megatron-LM/:/workspace/rmct",
+    "RMCT_CONFIG": "/workspace/rmct/configs/dev_smoke.json",
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1"
+  }
+}'
++ ray job submit --address=http://127.0.0.1:8265 '--runtime-env-json={
+  "env_vars": {
+    "PYTHONPATH": "/root/Megatron-LM/:/workspace/rmct",
+    "RMCT_CONFIG": "/workspace/rmct/configs/dev_smoke.json",
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1"
+  }
+}' -- python3 /root/slime/train.py --actor-num-nodes 1 --actor-num-gpus-per-node 1 --rollout-num-gpus 1 --spec slime_plugins.models.qwen3_5 get_qwen3_5_spec --disable-bias-linear --qk-layernorm --group-query-attention --num-attention-heads 8 --num-query-groups 2 --kv-channels 256 --num-layers 24 --hidden-size 2048 --ffn-hidden-size 6144 --use-gated-attention --normalization RMSNorm --apply-layernorm-1p --position-embedding-type rope --norm-epsilon 1e-06 --rotary-percent 0.25 --swiglu --vocab-size 248320 --rotary-base 10000000 --attention-output-gate --hf-checkpoint /workspace/models/Qwen3.5-2B --ref-load /workspace/models/Qwen3.5-2B_torch_dist --load /workspace/models/Qwen3.5-2B_torch_dist --save /workspace/runs/dev_smoke/checkpoints --save-interval 2 --rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-advantage-function-path slime_port.rmct_advantage.compute_advantages --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --kl-coef 0.0 --prompt-data /workspace/rmct/data/dev_smoke/suggested-answer-pairs.jsonl --input-key unbiased_messages --apply-chat-template --rollout-global-dataset --num-rollout 5 --rollout-batch-size 4 --n-samples-per-prompt 8 --rollout-max-response-len 1024 --rollout-temperature 1.0 --global-batch-size 32 --tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 --use-dynamic-batch-size --max-tokens-per-gpu 8192 --optimizer adam --lr 1e-6 --lr-decay-style constant --weight-decay 0.1 --adam-beta1 0.9 --adam-beta2 0.95 --use-distributed-optimizer --rollout-num-gpus-per-engine 1 --sglang-mem-fraction-static 0.5 --sglang-mamba-radix-cache-strategy extra_buffer --attention-dropout 0.0 --hidden-dropout 0.0 --accumulate-allreduce-grads-in-fp32 --attention-softmax-in-fp32 --attention-backend flash --colocate --debug-rollout-only --save-debug-rollout-data '/workspace/runs/dev_smoke/debug/rollout_{rollout_id}.pt'
+[37mJob submission server address[39m: [1mhttp://127.0.0.1:8265[22m
+
+[32m-------------------------------------------------------[39m
+[32mJob 'raysubmit_qn6cxKuF9nTVRvd5' submitted successfully[39m
+[32m-------------------------------------------------------[39m
+
+[36mNext steps[39m
+  Query the logs of the job:
+    [1mray job logs raysubmit_qn6cxKuF9nTVRvd5[22m
+  Query the status of the job:
+    [1mray job status raysubmit_qn6cxKuF9nTVRvd5[22m
+  Request the job to be stopped:
+    [1mray job stop raysubmit_qn6cxKuF9nTVRvd5[22m
+
+Tailing logs until the job exits (disable with --no-wait):
+2026-08-05 23:02:15,032	INFO job_manager.py:583 -- Runtime env is setting up.
+Running entrypoint for job raysubmit_qn6cxKuF9nTVRvd5: python3 /root/slime/train.py --actor-num-nodes 1 --actor-num-gpus-per-node 1 --rollout-num-gpus 1 --spec slime_plugins.models.qwen3_5 get_qwen3_5_spec --disable-bias-linear --qk-layernorm --group-query-attention --num-attention-heads 8 --num-query-groups 2 --kv-channels 256 --num-layers 24 --hidden-size 2048 --ffn-hidden-size 6144 --use-gated-attention --normalization RMSNorm --apply-layernorm-1p --position-embedding-type rope --norm-epsilon 1e-06 --rotary-percent 0.25 --swiglu --vocab-size 248320 --rotary-base 10000000 --attention-output-gate --hf-checkpoint /workspace/models/Qwen3.5-2B --ref-load /workspace/models/Qwen3.5-2B_torch_dist --load /workspace/models/Qwen3.5-2B_torch_dist --save /workspace/runs/dev_smoke/checkpoints --save-interval 2 --rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-advantage-function-path slime_port.rmct_advantage.compute_advantages --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --kl-coef 0.0 --prompt-data /workspace/rmct/data/dev_smoke/suggested-answer-pairs.jsonl --input-key unbiased_messages --apply-chat-template --rollout-global-dataset --num-rollout 5 --rollout-batch-size 4 --n-samples-per-prompt 8 --rollout-max-response-len 1024 --rollout-temperature 1.0 --global-batch-size 32 --tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 --use-dynamic-batch-size --max-tokens-per-gpu 8192 --optimizer adam --lr 1e-6 --lr-decay-style constant --weight-decay 0.1 --adam-beta1 0.9 --adam-beta2 0.95 --use-distributed-optimizer --rollout-num-gpus-per-engine 1 --sglang-mem-fraction-static 0.5 --sglang-mamba-radix-cache-strategy extra_buffer --attention-dropout 0.0 --hidden-dropout 0.0 --accumulate-allreduce-grads-in-fp32 --attention-softmax-in-fp32 --attention-backend flash --colocate --debug-rollout-only --save-debug-rollout-data '/workspace/runs/dev_smoke/debug/rollout_{rollout_id}.pt'
+[2026-08-05 23:02:24] megatron_chunked_grad_coalesce_patch.py:133 - slime grad coalesce patch applied to megatron.core.distributed.finalize_model_grads._allreduce_non_tensor_model_parallel_grads (chunk=1024 MiB)
+Unable to import `torchao` Tensor objects. This may affect loading checkpoints serialized with `torchao`
+/usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:51: UserWarning: transformers 5.12.1 is not tested with current version of modelopt and may cause issues. Please install recommended version with `pip install -U nvidia-modelopt[hf]` if working with HF models.
+  _warnings.warn(
+LANG_RL Log directory: None
+ > padded vocab (size: 248320) with 0 dummy tokens (new size: 248320)
+[2026-08-05 23:02:27] arguments.py:171 - --tokenizer-model not set, use --hf-checkpoint as tokenizer model.
+[2026-08-05 23:02:27] arguments.py:1958 - args.eval_max_context_len is not set. Use args.rollout_max_context_len None as default value.
+[2026-08-05 23:02:27] placement_group.py:125 - Creating placement group with 1 GPUs...
+2026-08-05 23:02:27,447	INFO worker.py:1683 -- Using address 172.24.0.2:6379 set in the environment variable RAY_ADDRESS
+2026-08-05 23:02:27,451	INFO worker.py:1833 -- Connecting to existing Ray cluster at address: 172.24.0.2:6379...
+2026-08-05 23:02:27,462	INFO worker.py:2015 -- Connected to Ray cluster. View the dashboard at [1m[32mhttp://127.0.0.1:8265 [39m[22m
+[2026-08-05 23:02:28] placement_group.py:92 -   bundle    0, actual_bundle_index:    0, node: 172.24.0.2, gpu: 0
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:02:36] rollout.py:1061 - Launch router with args: RouterArgs(worker_urls=[], host='172.24.0.2', port=4032, mini_lb=False, test_external_dp_routing=False, pd_disaggregation=False, prefill_urls=[], decode_urls=[], policy='cache_aware', prefill_policy=None, decode_policy=None, worker_startup_timeout_secs=1800, worker_startup_check_interval=30, cache_threshold=0.3, balance_abs_threshold=10, balance_rel_threshold=1.2, eviction_interval_secs=60, max_tree_size=67108864, max_idle_secs=14400, assignment_mode='random', max_payload_size=536870912, bucket_adjust_interval_secs=5, dp_aware=False, enable_igw=False, api_key=None, log_dir=None, log_level='warn', json_log=False, service_discovery=False, selector={}, service_discovery_port=80, service_discovery_namespace=None, prefill_selector={}, decode_selector={}, bootstrap_port_annotation='sglang.ai/bootstrap-port', prometheus_port=5774, prometheus_host='0.0.0.0', prometheus_duration_buckets=None, request_id_headers=None, request_timeout_secs=14400, shutdown_grace_period_secs=180, max_concurrent_requests=-1, queue_size=100, queue_timeout_secs=60, rate_limit_tokens_per_second=None, cors_allowed_origins=[], retry_max_retries=5, retry_initial_backoff_ms=50, retry_max_backoff_ms=30000, retry_backoff_multiplier=1.5, retry_jitter_factor=0.2, disable_retries=False, health_failure_threshold=3, health_success_threshold=2, health_check_timeout_secs=5, health_check_interval_secs=60, health_check_endpoint='/health', disable_health_check=True, cb_failure_threshold=10, cb_success_threshold=3, cb_timeout_duration_secs=60, cb_window_duration_secs=120, disable_circuit_breaker=True, model_path=None, tokenizer_path=None, chat_template=None, tokenizer_cache_enable_l0=False, tokenizer_cache_l0_max_entries=10000, tokenizer_cache_enable_l1=False, tokenizer_cache_l1_max_memory=52428800, reasoning_parser=None, tool_call_parser=None, mcp_config_path=None, backend='sglang', history_backend='memory', oracle_wallet_path=None, oracle_tns_alias=None, oracle_connect_descriptor=None, oracle_username=None, oracle_password=None, oracle_pool_min=1, oracle_pool_max=16, oracle_pool_timeout_secs=30, postgres_db_url=None, postgres_pool_max=16, redis_url=None, redis_pool_max=16, redis_retention_days=30, client_cert_path=None, client_key_path=None, ca_cert_paths=[], server_cert_path=None, server_key_path=None, enable_trace=False, otlp_traces_endpoint='localhost:4317', control_plane_api_keys=[], control_plane_audit_enabled=False, jwt_issuer=None, jwt_audience=None, jwt_jwks_uri=None, jwt_role_mapping={})
+[36m(pid=12739)[0m Unable to import `torchao` Tensor objects. This may affect loading checkpoints serialized with `torchao`
+[36m(pid=12739)[0m /usr/local/lib/python3.12/dist-packages/modelopt/torch/__init__.py:51: UserWarning: transformers 5.12.1 is not tested with current version of modelopt and may cause issues. Please install recommended version with `pip install -U nvidia-modelopt[hf]` if working with HF models.
+[36m(pid=12739)[0m   _warnings.warn(
+[36m(pid=12739)[0m LANG_RL Log directory: None
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:02:39] rollout.py:1072 - Router launched at 172.24.0.2:4032, Prometheus port: 5774
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:02:39] rollout.py:1150 - Engine group 'regular' gpu_offset=0 (abs=0): needs_offload=False
+[36m(pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:992: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK will be deprecated, please use SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK instead
+[36m(pid=12892)[0m   warnings.warn(
+[36m(pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:1039: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK is deprecated, please use SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK
+[36m(pid=12892)[0m   warnings.warn(
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:02:47] rollout.py:1017 - Ports for engine 0: {'host': '172.24.0.2', 'port': 15000, 'nccl_port': 15001, 'dist_init_addr': '172.24.0.2:15016'}
+[36m(SGLangEngine pid=12892)[0m Failed to load generation config for /workspace/models/Qwen3.5-2B: /workspace/models/Qwen3.5-2B does not appear to have a file named generation_config.json. Checkout 'https://huggingface.co//workspace/models/Qwen3.5-2B/tree/main' for available files.. Proceeding without generation config.
+[36m(SGLangEngine pid=12892)[0m Breakable CUDA graph is incompatible with multimodal model; disabling prefill CUDA graph.
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:02:49] rollout.py:457 - import slime_port.rmct_rollout.generate_rollout as generate_rollout function.
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:02:49] rollout.py:458 - import slime_port.rmct_rollout.generate_rollout as eval_generate_rollout function.
+[36m(SGLangEngine pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:992: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK will be deprecated, please use SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK instead
+[36m(SGLangEngine pid=12892)[0m   warnings.warn(
+[36m(SGLangEngine pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:1039: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK is deprecated, please use SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK
+[36m(SGLangEngine pid=12892)[0m   warnings.warn(
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:02:57] server_args=ServerArgs(model_path='/workspace/models/Qwen3.5-2B', tokenizer_path='/workspace/models/Qwen3.5-2B', tokenizer_mode='auto', tokenizer_backend='huggingface', tokenizer_worker_num=1, detokenizer_worker_num=1, skip_tokenizer_init=False, load_format='auto', model_loader_extra_config='{}', trust_remote_code=True, context_length=None, is_embedding=False, enable_multimodal=None, revision=None, model_impl='auto', model_config_parser='auto', json_model_override_args='{}', dtype='auto', quantization=None, quantization_param_path=None, kv_cache_dtype='auto', enable_fp32_lm_head=False, modelopt_quant=None, modelopt_checkpoint_restore_path=None, modelopt_checkpoint_save_path=None, modelopt_export_path=None, quantize_and_serve=False, rl_quant_profile=None, enable_tf32_matmul=False, mem_fraction_static=0.5, max_running_requests=None, max_queued_requests=None, max_total_tokens=None, chunked_prefill_size=8192, enable_dynamic_chunking=False, max_prefill_tokens=16384, prefill_max_requests=None, schedule_policy='fcfs', enable_priority_scheduling=False, disable_priority_preemption=False, default_priority_value=None, abort_on_priority_when_disabled=False, schedule_low_priority_values_first=False, priority_scheduling_preemption_threshold=10, schedule_conservativeness=1.0, page_size=1, swa_full_tokens_ratio=0.8, disable_hybrid_swa_memory=False, radix_eviction_policy='lru', prefill_only_disable_kv_cache=False, disable_radix_cache=False, enable_page_major_kv_layout=False, enable_unified_memory=False, disable_chunked_prefix_cache=False, disable_overlap_schedule=False, num_continuous_decode_steps=1, scheduler_recv_interval=1, enable_mixed_chunk=False, nccl_port=15001, dist_timeout=None, dist_init_addr='172.24.0.2:15016', nnodes=1, node_rank=0, tp_size=1, dcp_size=1, pp_size=1, pp_max_micro_batch_size=None, pp_async_batch_depth=0, dp_size=1, load_balance_method='round_robin', attn_cp_size=1, moe_dp_size=1, enable_prefill_cp=False, cp_strategy=None, enable_dsa_prefill_context_parallel=False, dsa_prefill_cp_mode='round-robin-split', enable_prefill_context_parallel=False, prefill_cp_mode='in-seq-split', enable_dp_attention=False, enable_dp_attention_local_control_broadcast=False, enable_dp_lm_head=False, enable_attn_tp_input_scattered=False, disable_attn_tp_gather=False, enable_p2p_check=False, device='cuda', base_gpu_id=0, gpu_id_step=1, random_seed=1234, watchdog_timeout=300, soft_watchdog_timeout=None, sleep_on_idle=False, use_ray=False, custom_sigquit_handler=None, numa_node=None, gc_threshold=None, host='172.24.0.2', port=15000, fastapi_root_path='', grpc_mode=False, skip_server_warmup=True, warmups=None, enable_http2=False, ssl_keyfile=None, ssl_certfile=None, ssl_ca_certs=None, ssl_keyfile_password=None, enable_ssl_refresh=False, api_key=None, admin_api_key=None, served_model_name='/workspace/models/Qwen3.5-2B', weight_version='default', chat_template=None, hf_chat_template_name=None, completion_template=None, file_storage_path='sglang_storage', enable_cache_report=False, reasoning_parser=None, strip_thinking_cache=False, enable_strict_thinking=False, tool_call_parser=None, tool_server=None, sampling_defaults='model', asr_max_buffer_seconds=60, asr_max_concurrent_sessions=32, preferred_sampling_params=None, allow_auto_truncate=False, stream_interval=1, batch_notify_size=16, stream_response_default_include_usage=False, incremental_streaming_output=False, enable_streaming_session=False, enable_session_radix_cache=False, log_level='info', log_level_http=None, log_requests=False, log_requests_level=2, log_requests_format='text', log_requests_target=None, uvicorn_access_log_exclude_prefixes=[], crash_dump_folder=None, show_time_cost=False, enable_metrics=True, grpc_http_sidecar_port=None, enable_mfu_metrics=False, enable_metrics_for_all_schedulers=False, load_snapshot_publish_interval=15, tokenizer_metrics_custom_labels_header='x-custom-labels', tokenizer_metrics_allowed_custom_labels=None, extra_metric_labels=None, bucket_time_to_first_token=None, bucket_inter_token_latency=None, bucket_e2e_request_latency=None, prompt_tokens_buckets=None, generation_tokens_buckets=None, gc_warning_threshold_secs=0.0, decode_log_interval=40, enable_request_time_stats_logging=False, kv_events_config=None, enable_forward_pass_metrics=False, forward_pass_metrics_worker_id='', forward_pass_metrics_ipc_name=None, enable_trace=False, trace_modules='request', otlp_traces_endpoint='localhost:4317', export_metrics_to_file=False, export_metrics_to_file_dir=None, stat_loggers=None, constrained_json_whitespace_pattern=None, constrained_json_disable_any_whitespace=False, attention_backend='fa3', decode_attention_backend=None, prefill_attention_backend=None, sampling_backend='flashinfer', grammar_backend='xgrammar', radix_cache_backend=None, mm_attention_backend=None, fp8_gemm_runner_backend='auto', fp4_gemm_runner_backend='auto', bf16_gemm_backend='auto', dsa_prefill_backend=None, dsa_decode_backend=None, dsa_paged_mqa_logits_backend='auto', dsa_topk_backend='sgl-kernel', disable_flashinfer_autotune=False, mamba_backend='triton', cuda_graph_config=CudaGraphConfig(decode=PhaseConfig(backend='full', max_bs=256, bs=[1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256], tc_compiler='eager', full_prefill_max_req=None), prefill=PhaseConfig(backend='disabled', max_bs=8192, bs=[4, 8, 12, 16, 20, 24, 28, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 480, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680, 8192], tc_compiler='eager', full_prefill_max_req=None)), cuda_graph_backend_decode=None, cuda_graph_backend_prefill=None, cuda_graph_max_bs_decode=None, cuda_graph_max_bs_prefill=None, cuda_graph_bs_decode=None, cuda_graph_bs_prefill=None, cuda_graph_tc_compiler=None, disable_prefill_cuda_graph=False, disable_decode_cuda_graph=False, disable_cuda_graph=False, disable_cuda_graph_padding=False, enable_profile_cuda_graph=False, enable_cudagraph_gc=False, debug_cuda_graph=False, enable_layerwise_nvtx_marker=False, enable_nccl_nvls=False, enable_symm_mem=False, triton_attention_reduce_in_fp32=False, triton_attention_num_kv_splits=8, triton_attention_split_tile_size=None, flashinfer_mla_disable_ragged=False, enable_fused_qk_norm_rope=False, enable_precise_embedding_interpolation=False, enable_fused_moe_sum_all_reduce=False, enable_deepseek_v4_fp4_indexer=False, disable_custom_all_reduce=False, enable_mscclpp=False, enable_torch_symm_mem=False, pre_warm_nccl=False, enable_quant_communications=False, enable_flashinfer_allreduce_fusion=False, enforce_disable_flashinfer_allreduce_fusion=False, flashinfer_allreduce_fusion_backend=None, enable_aiter_allreduce_fusion=False, enable_torch_compile=False, enable_torch_compile_debug_mode=False, torch_compile_max_bs=32, torchao_config='', speculative_algorithm=None, speculative_draft_model_path=None, speculative_draft_model_revision=None, speculative_draft_load_format=None, speculative_num_steps=None, speculative_eagle_topk=None, speculative_num_draft_tokens=None, speculative_dflash_block_size=None, speculative_accept_threshold_single=1.0, speculative_accept_threshold_acc=1.0, speculative_use_rejection_sampling=False, speculative_token_map=None, speculative_attention_mode='prefill', speculative_draft_attention_backend=None, speculative_draft_window_size=None, speculative_moe_runner_backend='auto', speculative_moe_a2a_backend=None, speculative_draft_model_quantization=None, speculative_skip_dp_mlp_sync=False, enable_multi_layer_eagle=False, speculative_adaptive=False, speculative_adaptive_config=None, decoupled_spec_bind_endpoint=None, decoupled_spec_connect_endpoints=None, decoupled_spec_rank=None, decoupled_spec_role='null', spec_trace_dir=None, speculative_ngram_min_bfs_breadth=1, speculative_ngram_max_bfs_breadth=10, speculative_ngram_match_type='BFS', speculative_ngram_max_trie_depth=18, speculative_ngram_capacity=10000000, speculative_ngram_external_corpus_path=None, speculative_ngram_external_sam_budget=0, speculative_ngram_external_corpus_max_tokens=10000000, ep_size=1, moe_a2a_backend='none', moe_runner_backend='auto', flashinfer_mxfp4_moe_precision='default', deepep_mode='auto', deepep_dispatcher_output_dtype='auto', ep_num_redundant_experts=0, ep_dispatch_algorithm=None, init_expert_location='trivial', enable_eplb=False, eplb_algorithm='auto', eplb_rebalance_num_iterations=1000, eplb_rebalance_layers_per_chunk=None, eplb_min_rebalancing_utilization_threshold=1.0, expert_distribution_recorder_mode=None, expert_distribution_recorder_buffer_size=1000, enable_expert_distribution_metrics=False, deepep_config=None, moe_dense_tp_size=None, elastic_ep_backend=None, enable_elastic_expert_backup=False, mooncake_ib_device=None, enable_deepep_waterfill=False, elastic_ep_rejoin=False, disable_flashinfer_cutlass_moe_fp4_allgather=False, disable_shared_experts_fusion=False, enforce_shared_experts_fusion=False, max_mamba_cache_size=None, mamba_ssm_dtype=None, enable_mamba_cache_stochastic_rounding=False, mamba_cache_philox_rounds=0, mamba_full_memory_ratio=0.9, mamba_radix_cache_strategy='extra_buffer', uses_mamba_radix_cache=True, mamba_track_interval=256, enable_int8_mamba_checkpoint=False, int8_mamba_ckpt_size=None, linear_attn_backend='triton', linear_attn_decode_backend=None, linear_attn_prefill_backend=None, enable_linear_replayssm=False, linear_replayssm_cache_len=16, enable_hierarchical_cache=False, hicache_ratio=2.0, hicache_size=0, hicache_write_policy='write_through', hicache_io_backend='kernel', hicache_mem_layout='page_first', hicache_storage_backend=None, hicache_storage_prefetch_policy='timeout', hicache_storage_backend_extra_config=None, release_hicache=False, enable_hisparse=False, hisparse_config=None, enable_broadcast_mm_inputs_process=False, enable_prefix_mm_cache=False, mm_enable_dp_encoder=False, mm_process_config={}, limit_mm_data_per_request=None, enable_mm_global_cache=False, disable_fast_image_processor=False, keep_mm_feature_on_device=False, enable_lora=None, enable_lora_overlap_loading=None, max_lora_rank=None, lora_target_modules=None, lora_paths=None, max_loaded_loras=None, max_loras_per_batch=8, lora_eviction_policy='lru', lora_backend='csgmv', max_lora_chunk_size=16, experts_shared_outer_loras=None, lora_use_virtual_experts=False, lora_strict_loading=False, lora_drain_wait_threshold=0.0, enable_two_batch_overlap=False, enable_single_batch_overlap=False, tbo_token_distribution_threshold=0.48, cpu_offload_gb=0, offload_group_size=-1, offload_num_in_group=1, offload_prefetch_step=1, offload_mode='cpu', enable_lmcache=False, lmcache_config_file=None, kt_weight_path=None, kt_method='AMXINT4', kt_cpuinfer=None, kt_threadpool_count=2, kt_num_gpu_experts=None, kt_max_deferred_experts_per_token=None, dllm_algorithm=None, dllm_algorithm_config=None, disaggregation_mode='null', disaggregation_transfer_backend='mooncake', disaggregation_bootstrap_port=8998, disaggregation_ib_device=None, disaggregation_decode_enable_radix_cache=False, disaggregation_decode_enable_offload_kvcache=False, num_reserved_decode_tokens=512, disaggregation_decode_extra_slots=None, disaggregation_decode_polling_interval=1, optimistic_prefill_retries=0, encoder_only=False, language_only=False, encoder_transfer_backend='zmq_to_scheduler', encoder_urls=[], encoder_bootstrap_port=8997, encoder_register_urls=[], enable_adaptive_dispatch_to_encoder=False, enable_pdmux=False, pdmux_config_path=None, sm_group_num=8, custom_weight_loader=[], custom_pull_weights_pre_read_hook=None, weight_loader_disable_mmap=False, weight_loader_prefetch_checkpoints=False, weight_loader_prefetch_num_threads=4, weight_loader_drop_cache_after_load=False, remote_instance_weight_loader_seed_instance_ip=None, remote_instance_weight_loader_seed_instance_service_port=None, remote_instance_weight_loader_send_weights_group_ports=None, remote_instance_weight_loader_backend='nccl', remote_instance_weight_loader_start_seed_via_transfer_engine=False, engine_info_bootstrap_port=6789, modelexpress_config=None, download_dir=None, model_checksum=None, delete_ckpt_after_loading=False, decrypted_config_file=None, decrypted_draft_config_file=None, checkpoint_engine_wait_weights_before_ready=False, enable_prefill_delayer=False, prefill_delayer_max_delay_passes=30, prefill_delayer_token_usage_low_watermark=None, prefill_delayer_forward_passes_buckets=None, prefill_delayer_wait_seconds_buckets=None, prefill_delayer_queue_min_ratio=None, prefill_delayer_max_delay_ms=None, min_free_slots_delay=None, enable_deterministic_inference=False, rl_on_policy_target=None, kv_canary='none', kv_canary_real_data='none', kv_canary_sweep_interval=0, enable_dynamic_batch_tokenizer=False, dynamic_batch_tokenizer_batch_size=32, dynamic_batch_tokenizer_batch_timeout=0.002, enable_tokenizer_batch_encode=False, disable_tokenizer_batch_decode=False, debug_tensor_dump_output_folder=None, debug_tensor_dump_layers=None, debug_tensor_dump_input_file=None, enable_memory_saver=False, enable_weights_cpu_backup=False, enable_draft_weights_cpu_backup=True, enable_custom_logit_processor=False, enable_return_hidden_states=False, enable_return_routed_experts=False, enable_return_indexer_topk=False, disable_outlines_disk_cache=False, enable_mis=False, forward_hooks=None, msprobe_dump_config=None)
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:02:57] User lacks permission to set NUMA affinity, skipping NUMA node configuration for GPU. If using docker, try adding --cap-add SYS_NICE to your docker run command.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:02:57] Failed to load generation config for /workspace/models/Qwen3.5-2B: /workspace/models/Qwen3.5-2B does not appear to have a file named generation_config.json. Checkout 'https://huggingface.co//workspace/models/Qwen3.5-2B/tree/main' for available files.. Proceeding without generation config.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:02:58] Detected Megatron Core, using Megatron-FSDP with Megatron.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:02:58] Detected Megatron Core, using Megatron-FSDP with Megatron.
+[36m(SGLangEngine pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:992: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK will be deprecated, please use SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK instead
+[36m(SGLangEngine pid=12892)[0m   warnings.warn(
+[36m(SGLangEngine pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:1039: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK is deprecated, please use SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK
+[36m(SGLangEngine pid=12892)[0m   warnings.warn(
+[36m(SGLangEngine pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:992: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK will be deprecated, please use SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK instead
+[36m(SGLangEngine pid=12892)[0m   warnings.warn(
+[36m(SGLangEngine pid=12892)[0m /sgl-workspace/sglang/python/sglang/srt/environ.py:1039: UserWarning: Environment variable SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK is deprecated, please use SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK
+[36m(SGLangEngine pid=12892)[0m   warnings.warn(
+[36m(SGLangEngine pid=12892)[0m [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:01] Using default HuggingFace chat template with detected content format: openai
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:01] Auto-detected template features: reasoning_parser=deepseek-r1, tool_call_parser=qwen3_coder
+[36m(SGLangEngine pid=12892)[0m <frozen importlib._bootstrap_external>:1297: FutureWarning: The cuda.cudart module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.runtime module instead.
+[36m(SGLangEngine pid=12892)[0m <frozen importlib._bootstrap_external>:1297: FutureWarning: The cuda.nvrtc module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.nvrtc module instead.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:05] Failed to load generation config for /workspace/models/Qwen3.5-2B: /workspace/models/Qwen3.5-2B does not appear to have a file named generation_config.json. Checkout 'https://huggingface.co//workspace/models/Qwen3.5-2B/tree/main' for available files.. Proceeding without generation config.
+[36m(SGLangEngine pid=12892)[0m [transformers] The `use_fast` parameter is deprecated and will be removed in a future version. Use `backend="torchvision"` instead of `use_fast=True`, or `backend="pil"` instead of `use_fast=False`.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:06] Detected Megatron Core, using Megatron-FSDP with Megatron.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:06] Detected Megatron Core, using Megatron-FSDP with Megatron.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:08] Init torch distributed begin.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:08] Init torch distributed ends. elapsed=0.23 s, mem usage=0.09 GB
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:09] Load weight begin. avail mem=78.47 GB
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:09] Multimodal attention backend not set. Use fa3.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:09] Using fa3 as multimodal attention backend.
+[36m(SGLangEngine pid=12892)[0m [transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:09] using attn output gate!
+[36m(SGLangEngine pid=12892)[0m 
+Multi-thread loading shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Multi-thread loading shards: 100% Completed | 1/1 [00:00<00:00,  1.10it/s]
+Multi-thread loading shards: 100% Completed | 1/1 [00:00<00:00,  1.10it/s]
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:10] Load weight end. elapsed=1.19 s, type=Qwen3_5ForConditionalGeneration, avail mem=74.20 GB, mem usage=4.27 GB.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] Mamba Cache is allocated. max_mamba_cache_size: 908, conv_state size: 0.56GB, ssm_state size: 15.98GB 
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] KV Cache is allocated. dtype: torch.bfloat16, #tokens: 1604442, K size: 9.18 GB, V size: 9.18 GB
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] Memory pool end. avail mem=39.06 GB
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] Linear attention kernel backend: decode=triton, prefill=triton
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] Using hybrid linear attention backend for hybrid GDN models.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] GDN kernel dispatcher: decode=TritonGDNKernel, extend=TritonGDNKernel, verify=TritonGDNKernel packed_decode=True
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] Disable prefill CUDA graph because cuda_graph_config resolved prefill.backend='disabled' (e.g. via --cuda-graph-backend-prefill=disabled or auto-disable rules).
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:11] Capture target decode CUDA graph begin. backend=full, num_tokens_per_bs=1, bs=[1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 181], avail mem=38.89 GB
+[36m(SGLangEngine pid=12892)[0m 
+  0%|          | 0/27 [00:00<?, ?it/s]
+Capturing batches (bs=181 avail_mem=38.54 GB):   0%|          | 0/27 [00:00<?, ?it/s]
+[36m(SGLangEngine pid=12892)[0m 2026-08-05 23:03:12,557 - CUTE_DSL - WARNING - [handle_import_error] - Unexpected error during package walk: cutlass.cute.experimental
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:12] Unexpected error during package walk: cutlass.cute.experimental
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=181 avail_mem=38.54 GB):   4%|▎         | 1/27 [00:01<00:35,  1.38s/it]
+Capturing batches (bs=176 avail_mem=38.28 GB):   4%|▎         | 1/27 [00:01<00:35,  1.38s/it]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=168 avail_mem=38.28 GB):   4%|▎         | 1/27 [00:01<00:35,  1.38s/it]
+Capturing batches (bs=168 avail_mem=38.28 GB):  11%|█         | 3/27 [00:01<00:09,  2.51it/s]
+Capturing batches (bs=160 avail_mem=38.28 GB):  11%|█         | 3/27 [00:01<00:09,  2.51it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=152 avail_mem=38.28 GB):  11%|█         | 3/27 [00:01<00:09,  2.51it/s]
+Capturing batches (bs=152 avail_mem=38.28 GB):  19%|█▊        | 5/27 [00:01<00:04,  4.50it/s]
+Capturing batches (bs=144 avail_mem=38.28 GB):  19%|█▊        | 5/27 [00:01<00:04,  4.50it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=136 avail_mem=38.28 GB):  19%|█▊        | 5/27 [00:01<00:04,  4.50it/s]
+Capturing batches (bs=136 avail_mem=38.28 GB):  26%|██▌       | 7/27 [00:01<00:03,  6.65it/s]
+Capturing batches (bs=128 avail_mem=38.28 GB):  26%|██▌       | 7/27 [00:01<00:03,  6.65it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=120 avail_mem=38.28 GB):  26%|██▌       | 7/27 [00:01<00:03,  6.65it/s]
+Capturing batches (bs=120 avail_mem=38.28 GB):  33%|███▎      | 9/27 [00:01<00:02,  8.73it/s]
+Capturing batches (bs=112 avail_mem=38.27 GB):  33%|███▎      | 9/27 [00:01<00:02,  8.73it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=104 avail_mem=38.27 GB):  33%|███▎      | 9/27 [00:01<00:02,  8.73it/s]
+Capturing batches (bs=104 avail_mem=38.27 GB):  41%|████      | 11/27 [00:01<00:01, 10.71it/s]
+Capturing batches (bs=96 avail_mem=38.27 GB):  41%|████      | 11/27 [00:01<00:01, 10.71it/s] 
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=88 avail_mem=38.27 GB):  41%|████      | 11/27 [00:01<00:01, 10.71it/s]
+Capturing batches (bs=88 avail_mem=38.27 GB):  48%|████▊     | 13/27 [00:02<00:01, 12.43it/s]
+Capturing batches (bs=80 avail_mem=38.27 GB):  48%|████▊     | 13/27 [00:02<00:01, 12.43it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=72 avail_mem=38.27 GB):  48%|████▊     | 13/27 [00:02<00:01, 12.43it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=72 avail_mem=38.27 GB):  56%|█████▌    | 15/27 [00:02<00:00, 13.60it/s]
+Capturing batches (bs=64 avail_mem=38.27 GB):  56%|█████▌    | 15/27 [00:02<00:00, 13.60it/s]
+Capturing batches (bs=56 avail_mem=38.27 GB):  56%|█████▌    | 15/27 [00:02<00:00, 13.60it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=56 avail_mem=38.27 GB):  63%|██████▎   | 17/27 [00:02<00:00, 14.82it/s]
+Capturing batches (bs=48 avail_mem=38.27 GB):  63%|██████▎   | 17/27 [00:02<00:00, 14.82it/s]
+Capturing batches (bs=40 avail_mem=38.26 GB):  63%|██████▎   | 17/27 [00:02<00:00, 14.82it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=40 avail_mem=38.26 GB):  70%|███████   | 19/27 [00:02<00:00, 15.90it/s]
+Capturing batches (bs=32 avail_mem=38.26 GB):  70%|███████   | 19/27 [00:02<00:00, 15.90it/s]
+Capturing batches (bs=24 avail_mem=38.26 GB):  70%|███████   | 19/27 [00:02<00:00, 15.90it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=24 avail_mem=38.26 GB):  78%|███████▊  | 21/27 [00:02<00:00, 16.66it/s]
+Capturing batches (bs=16 avail_mem=38.26 GB):  78%|███████▊  | 21/27 [00:02<00:00, 16.66it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=12 avail_mem=38.26 GB):  78%|███████▊  | 21/27 [00:02<00:00, 16.66it/s]
+Capturing batches (bs=12 avail_mem=38.26 GB):  85%|████████▌ | 23/27 [00:02<00:00, 15.90it/s]
+Capturing batches (bs=8 avail_mem=38.26 GB):  85%|████████▌ | 23/27 [00:02<00:00, 15.90it/s] 
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=4 avail_mem=38.26 GB):  85%|████████▌ | 23/27 [00:02<00:00, 15.90it/s]
+Capturing batches (bs=2 avail_mem=38.25 GB):  85%|████████▌ | 23/27 [00:02<00:00, 15.90it/s]
+[36m(SGLangEngine pid=12892)[0m 
+Capturing batches (bs=2 avail_mem=38.25 GB):  96%|█████████▋| 26/27 [00:02<00:00, 17.57it/s]
+Capturing batches (bs=1 avail_mem=38.25 GB):  96%|█████████▋| 26/27 [00:02<00:00, 17.57it/s]
+Capturing batches (bs=1 avail_mem=38.25 GB): 100%|██████████| 27/27 [00:02<00:00,  9.61it/s]
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:15] Capture target decode CUDA graph end. elapsed=3.58 s, mem usage=0.63 GB, avail mem=38.25 GB.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:15] max_total_num_tokens=1604442, chunked_prefill_size=8192, max_prefill_tokens=16384, max_running_requests=181, context_len=262144, available_gpu_mem=38.25 GB
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:15] Tree cache initialized: source=default impl=MambaRadixCache hybrid_swa=False hybrid_ssm=True hierarchical=False streaming_wrapped=False
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:15] INFO:     Started server process [12984]
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:15] INFO:     Waiting for application startup.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:16] The server is fired up and ready to roll!
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:16] INFO:     Application startup complete.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:16] INFO:     Uvicorn running on http://172.24.0.2:15000 (Press CTRL+C to quit)
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:17] Prefill batch, #new-seq: 1, #new-token: 1, #cached-token: 0, full token usage: 0.00, mamba usage: 0.00, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 0.44
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:18] data_source.py:147 - Checkpoint /workspace/models/Qwen3.5-2B_torch_dist/rollout/global_dataset_state_dict_-1.pt does not exist.
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:18] INFO:     172.24.0.2:48588 - "GET /health_generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:18] INFO:     172.24.0.2:48592 - "GET /health HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:18] INFO:     172.24.0.2:48602 - "GET /server_info HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:18] INFO:     172.24.0.2:48602 - "GET /model_info HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Prefill batch, #new-seq: 1, #new-token: 162, #cached-token: 0, full token usage: 0.01, mamba usage: 0.11, #running-req: 0, #queue-req: 31, #pending-token: 0, cuda graph: False, input throughput (token/s): 95.55
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Prefill batch, #new-seq: 32, #new-token: 8192, #cached-token: 0, full token usage: 0.01, mamba usage: 0.22, #running-req: 1, #queue-req: 0, #pending-token: 8510, cuda graph: False, input throughput (token/s): 115358.77
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Prefill batch, #new-seq: 32, #new-token: 8192, #cached-token: 0, full token usage: 0.00, mamba usage: 0.22, #running-req: 32, #queue-req: 0, #pending-token: 318, cuda graph: False, input throughput (token/s): 157834.34
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Prefill batch, #new-seq: 1, #new-token: 318, #cached-token: 0, full token usage: 0.00, mamba usage: 0.22, #running-req: 63, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 101997.59
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Decode batch, #running-req: 64, #full token: 6018, full token usage: 0.00, mamba num: 202, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 588.81, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Decode batch, #running-req: 64, #full token: 8578, full token usage: 0.01, mamba num: 202, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15133.02, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Decode batch, #running-req: 64, #full token: 11138, full token usage: 0.01, mamba num: 202, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15116.14, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:19] Decode batch, #running-req: 64, #full token: 13698, full token usage: 0.01, mamba num: 202, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15042.50, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:48678 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] Decode batch, #running-req: 64, #full token: 16258, full token usage: 0.01, mamba num: 202, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15157.71, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] Decode batch, #running-req: 63, #full token: 18535, full token usage: 0.01, mamba num: 199, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15323.08, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] Decode batch, #running-req: 63, #full token: 21055, full token usage: 0.01, mamba num: 199, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15223.68, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:49114 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:49028 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:48992 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] Decode batch, #running-req: 61, #full token: 22916, full token usage: 0.01, mamba num: 193, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 14836.71, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:49100 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:49060 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] Decode batch, #running-req: 60, #full token: 24992, full token usage: 0.02, mamba num: 190, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 13977.61, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] INFO:     172.24.0.2:49054 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:20] Decode batch, #running-req: 58, #full token: 26158, full token usage: 0.02, mamba num: 181, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 14003.70, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:49086 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48672 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:49004 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:49058 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48652 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] Decode batch, #running-req: 55, #full token: 27500, full token usage: 0.02, mamba num: 175, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13493.62, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] Decode batch, #running-req: 52, #full token: 28207, full token usage: 0.02, mamba num: 166, mamba usage: 0.18, cuda graph: True, gen throughput (token/s): 13017.41, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:49072 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:49122 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48996 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48690 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48626 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] Decode batch, #running-req: 48, #full token: 28083, full token usage: 0.02, mamba num: 153, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 12696.63, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48606 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48644 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] Decode batch, #running-req: 46, #full token: 28815, full token usage: 0.02, mamba num: 147, mamba usage: 0.16, cuda graph: True, gen throughput (token/s): 12215.54, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48862 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48704 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] Decode batch, #running-req: 43, #full token: 28717, full token usage: 0.02, mamba num: 138, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 11188.01, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48608 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48612 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48632 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48836 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48674 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] INFO:     172.24.0.2:48782 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:49064 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:21] Decode batch, #running-req: 39, #full token: 27723, full token usage: 0.02, mamba num: 126, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10886.67, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48754 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48732 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48804 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48710 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48820 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 33, #full token: 24203, full token usage: 0.02, mamba num: 104, mamba usage: 0.11, cuda graph: True, gen throughput (token/s): 9749.60, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:49026 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48786 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 29, #full token: 23215, full token usage: 0.01, mamba num: 95, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 9008.88, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 29, #full token: 24375, full token usage: 0.02, mamba num: 95, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 8691.67, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 29, #full token: 25535, full token usage: 0.02, mamba num: 95, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 8642.47, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48736 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 28, #full token: 25815, full token usage: 0.02, mamba num: 92, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 8282.04, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] INFO:     172.24.0.2:48770 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 28, #full token: 26935, full token usage: 0.02, mamba num: 92, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 8190.07, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:22] Decode batch, #running-req: 27, #full token: 27083, full token usage: 0.02, mamba num: 89, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 8181.36, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] Decode batch, #running-req: 27, #full token: 28163, full token usage: 0.02, mamba num: 89, mamba usage: 0.10, cuda graph: True, gen throughput (token/s): 7879.65, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48592 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] Decode batch, #running-req: 26, #full token: 28209, full token usage: 0.02, mamba num: 86, mamba usage: 0.09, cuda graph: True, gen throughput (token/s): 7892.45, #queue-req: 0
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:23] rmct_rollout.py:367 - RMCT step 1: 20 grad samples, parse_rate=0.594, gap=0.4012, cache_hit=0.00
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:23] rollout.py:670 - Save debug rollout data to /workspace/runs/dev_smoke/debug/rollout_0.pt
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:23] rollout.py:1306 - perf 0: {'rmct/parse_rate': 0.59375, 'rmct/p_ref_mean': 0.446031746031746, 'rmct/p_hat_mean': 0.8472222222222223, 'rmct/gap_mean': 0.40119047619047626, 'rmct/has_signal': 1.0, 'rmct/n_grad_samples': 20.0, 'rmct/completion_len_p50': 685.0, 'rmct/completion_len_p99': 1024.0, 'rmct/truncated_frac': 0.40625, 'rmct/prefix_cache_hit_rate': 0.0, 'rollout/response_len/mean': 533.7, 'rollout/response_len/median': 535.0, 'rollout/response_len/max': 898, 'rollout/response_len/min': 202, 'rollout/prefix_cache_hit_rate': 0.0, 'rollout/avg_cached_tokens_per_sample': 0.0, 'rollout/repetition_frac': 0.0, 'rollout/truncated_ratio': 0.0, 'perf/rollout_time': 4.921489715576172, 'perf/tokens_per_gpu_per_sec': 2168.855492315169, 'perf/longest_sample_tokens_per_sec': 182.46507701883286, 'perf/effective_tokens_per_gpu_per_sec': 2168.855492315169, 'perf/longest_effective_sample_tokens_per_sec': 182.46507701883286}
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48654 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48688 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48702 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48724 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48742 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48760 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48798 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48826 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48842 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48844 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48850 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48878 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48888 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48894 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48902 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48906 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48910 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48922 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48932 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48934 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48950 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48966 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48970 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:48982 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:49020 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] INFO:     172.24.0.2:49042 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:23] Prefill batch, #new-seq: 1, #new-token: 384, #cached-token: 0, full token usage: 0.00, mamba usage: 0.08, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 82.39
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Prefill batch, #new-seq: 23, #new-token: 6356, #cached-token: 0, full token usage: 0.01, mamba usage: 0.19, #running-req: 1, #queue-req: 8, #pending-token: 0, cuda graph: False, input throughput (token/s): 113492.86
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Prefill batch, #new-seq: 32, #new-token: 8192, #cached-token: 0, full token usage: 0.00, mamba usage: 0.22, #running-req: 24, #queue-req: 0, #pending-token: 2252, cuda graph: False, input throughput (token/s): 63232.58
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Prefill batch, #new-seq: 9, #new-token: 1164, #cached-token: 1088, full token usage: 0.00, mamba usage: 0.22, #running-req: 55, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 273487.69
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Decode batch, #running-req: 64, #full token: 3370, full token usage: 0.00, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 1528.69, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Decode batch, #running-req: 64, #full token: 5930, full token usage: 0.00, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15292.90, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Decode batch, #running-req: 64, #full token: 8490, full token usage: 0.01, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15354.78, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Decode batch, #running-req: 64, #full token: 11050, full token usage: 0.01, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14589.23, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:24] Decode batch, #running-req: 64, #full token: 13610, full token usage: 0.01, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15473.96, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] Decode batch, #running-req: 64, #full token: 16170, full token usage: 0.01, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15004.31, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] Decode batch, #running-req: 64, #full token: 18730, full token usage: 0.01, mamba num: 203, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15486.69, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:48760 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] Decode batch, #running-req: 63, #full token: 20978, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15260.36, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:49004 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:49086 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:48770 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] Decode batch, #running-req: 62, #full token: 23146, full token usage: 0.01, mamba num: 197, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14592.23, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] Decode batch, #running-req: 60, #full token: 24842, full token usage: 0.02, mamba num: 191, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 13977.80, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:48878 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:48844 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] INFO:     172.24.0.2:48850 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:25] Decode batch, #running-req: 59, #full token: 26810, full token usage: 0.02, mamba num: 188, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 14180.77, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:49054 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] Decode batch, #running-req: 57, #full token: 28216, full token usage: 0.02, mamba num: 182, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 13616.43, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] Decode batch, #running-req: 56, #full token: 29974, full token usage: 0.02, mamba num: 179, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 13791.63, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:48678 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:48836 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] Decode batch, #running-req: 54, #full token: 31038, full token usage: 0.02, mamba num: 173, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13501.66, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] Decode batch, #running-req: 54, #full token: 33198, full token usage: 0.02, mamba num: 173, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 12856.87, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:48736 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:49060 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:49122 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:48782 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] Decode batch, #running-req: 52, #full token: 34116, full token usage: 0.02, mamba num: 167, mamba usage: 0.18, cuda graph: True, gen throughput (token/s): 12924.92, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:48754 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:48902 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] INFO:     172.24.0.2:49100 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:26] Decode batch, #running-req: 48, #full token: 33525, full token usage: 0.02, mamba num: 155, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 11813.29, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48654 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 46, #full token: 33949, full token usage: 0.02, mamba num: 149, mamba usage: 0.16, cuda graph: True, gen throughput (token/s): 11952.32, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48798 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:49058 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48612 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 44, #full token: 34291, full token usage: 0.02, mamba num: 143, mamba usage: 0.16, cuda graph: True, gen throughput (token/s): 11402.30, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48966 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 42, #full token: 34482, full token usage: 0.02, mamba num: 137, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 11222.29, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:49028 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 41, #full token: 35268, full token usage: 0.02, mamba num: 133, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 10770.14, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:49026 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 40, #full token: 36033, full token usage: 0.02, mamba num: 130, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10607.32, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48992 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48922 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] INFO:     172.24.0.2:48690 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 38, #full token: 34914, full token usage: 0.02, mamba num: 121, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9967.22, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:27] Decode batch, #running-req: 37, #full token: 36394, full token usage: 0.02, mamba num: 121, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9840.87, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] Decode batch, #running-req: 37, #full token: 37874, full token usage: 0.02, mamba num: 121, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9810.55, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] Decode batch, #running-req: 37, #full token: 39354, full token usage: 0.02, mamba num: 121, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9900.62, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48910 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48950 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:49042 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48982 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48934 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48932 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48970 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:49020 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48826 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48842 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48688 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48702 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48906 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48724 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48742 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48894 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48888 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48592 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48786 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48820 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48710 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48804 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48732 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:49064 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48674 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48632 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48608 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48704 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48862 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48644 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48606 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48626 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48996 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:49072 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48652 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:48672 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] INFO:     172.24.0.2:49114 - "POST /generate HTTP/1.1" 200 OK
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:28] rmct_rollout.py:367 - RMCT step 2: 14 grad samples, parse_rate=0.422, gap=-0.2000, cache_hit=0.06
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:28] rollout.py:670 - Save debug rollout data to /workspace/runs/dev_smoke/debug/rollout_1.pt
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:28] rollout.py:1306 - perf 1: {'rmct/parse_rate': 0.421875, 'rmct/p_ref_mean': 0.3333333333333333, 'rmct/p_hat_mean': 0.13333333333333333, 'rmct/gap_mean': -0.19999999999999998, 'rmct/has_signal': 1.0, 'rmct/n_grad_samples': 14.0, 'rmct/completion_len_p50': 1024.0, 'rmct/completion_len_p99': 1024.0, 'rmct/truncated_frac': 0.578125, 'rmct/prefix_cache_hit_rate': 0.0633147113594041, 'rollout/response_len/mean': 643.7857142857143, 'rollout/response_len/median': 651.5, 'rollout/response_len/max': 895, 'rollout/response_len/min': 422, 'rollout/zero_std/count_0.0': 2, 'rollout/prefix_cache_hit_rate': 0.0, 'rollout/avg_cached_tokens_per_sample': 0.0, 'rollout/repetition_frac': 0.0, 'rollout/truncated_ratio': 0.0, 'perf/rollout_time': 5.080447673797607, 'perf/tokens_per_gpu_per_sec': 1774.0562601371762, 'perf/longest_sample_tokens_per_sec': 176.1655778123569, 'perf/effective_tokens_per_gpu_per_sec': 1774.0562601371762, 'perf/longest_effective_sample_tokens_per_sec': 176.1655778123569}
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] Prefill batch, #new-seq: 1, #new-token: 64, #cached-token: 320, full token usage: 0.00, mamba usage: 0.08, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 14.14
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] Prefill batch, #new-seq: 20, #new-token: 815, #cached-token: 6400, full token usage: 0.00, mamba usage: 0.22, #running-req: 1, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 7105.10
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] Prefill batch, #new-seq: 43, #new-token: 833, #cached-token: 12224, full token usage: 0.00, mamba usage: 0.22, #running-req: 21, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 192321.71
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:28] Decode batch, #running-req: 64, #full token: 4885, full token usage: 0.00, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 3608.17, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:29] Decode batch, #running-req: 64, #full token: 7445, full token usage: 0.00, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15228.80, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:29] Decode batch, #running-req: 64, #full token: 10005, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15681.11, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:29] Decode batch, #running-req: 64, #full token: 12565, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14877.30, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:29] Decode batch, #running-req: 64, #full token: 15125, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14837.90, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:29] Decode batch, #running-req: 64, #full token: 17685, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15575.58, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:29] Decode batch, #running-req: 64, #full token: 20245, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15548.09, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] Decode batch, #running-req: 64, #full token: 22805, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15229.33, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:48760 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] Decode batch, #running-req: 63, #full token: 24998, full token usage: 0.02, mamba num: 197, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14898.77, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] Decode batch, #running-req: 63, #full token: 27518, full token usage: 0.02, mamba num: 197, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14616.12, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:49086 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:49020 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:49028 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:48724 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] Decode batch, #running-req: 59, #full token: 28272, full token usage: 0.02, mamba num: 185, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 14189.97, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:48742 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] Decode batch, #running-req: 58, #full token: 30156, full token usage: 0.02, mamba num: 182, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 13749.12, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:48798 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:48844 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] INFO:     172.24.0.2:48782 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:30] Decode batch, #running-req: 57, #full token: 31952, full token usage: 0.02, mamba num: 179, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 14084.51, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] Decode batch, #running-req: 55, #full token: 33109, full token usage: 0.02, mamba num: 173, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13556.69, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48826 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] Decode batch, #running-req: 55, #full token: 35309, full token usage: 0.02, mamba num: 173, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13020.70, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48902 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48836 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] Decode batch, #running-req: 52, #full token: 35469, full token usage: 0.02, mamba num: 164, mamba usage: 0.18, cuda graph: True, gen throughput (token/s): 12885.31, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] Decode batch, #running-req: 52, #full token: 37549, full token usage: 0.02, mamba num: 164, mamba usage: 0.18, cuda graph: True, gen throughput (token/s): 12216.73, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48910 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:49054 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48850 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48982 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] Decode batch, #running-req: 48, #full token: 36673, full token usage: 0.02, mamba num: 152, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 12235.14, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48992 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:49064 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48702 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] INFO:     172.24.0.2:48862 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:31] Decode batch, #running-req: 44, #full token: 35457, full token usage: 0.02, mamba num: 140, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 11776.44, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48842 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48672 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48644 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] Decode batch, #running-req: 41, #full token: 34761, full token usage: 0.02, mamba num: 131, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 11294.13, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48786 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48592 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48652 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] Decode batch, #running-req: 39, #full token: 34645, full token usage: 0.02, mamba num: 125, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10336.03, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48732 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] Decode batch, #running-req: 37, #full token: 34421, full token usage: 0.02, mamba num: 119, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 10264.80, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48922 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] Decode batch, #running-req: 37, #full token: 35901, full token usage: 0.02, mamba num: 119, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9604.21, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] Decode batch, #running-req: 36, #full token: 36425, full token usage: 0.02, mamba num: 116, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9573.44, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48996 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49114 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] Decode batch, #running-req: 34, #full token: 35881, full token usage: 0.02, mamba num: 110, mamba usage: 0.12, cuda graph: True, gen throughput (token/s): 9360.52, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49072 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48710 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48804 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48606 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48704 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48674 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48632 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48626 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48820 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48608 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48888 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49042 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48934 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48950 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48932 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48906 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48970 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48688 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48894 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48690 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49026 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48966 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48612 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49058 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48654 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49100 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48754 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49122 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49060 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48736 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48678 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48878 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:48770 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:32] INFO:     172.24.0.2:49004 - "POST /generate HTTP/1.1" 200 OK
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:33] rmct_rollout.py:367 - RMCT step 3: 14 grad samples, parse_rate=0.469, gap=0.3333, cache_hit=0.92
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:33] rollout.py:670 - Save debug rollout data to /workspace/runs/dev_smoke/debug/rollout_2.pt
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:33] rollout.py:1306 - perf 2: {'rmct/parse_rate': 0.46875, 'rmct/p_ref_mean': 0.47222222222222215, 'rmct/p_hat_mean': 0.8055555555555555, 'rmct/gap_mean': 0.3333333333333333, 'rmct/has_signal': 1.0, 'rmct/n_grad_samples': 14.0, 'rmct/completion_len_p50': 1024.0, 'rmct/completion_len_p99': 1024.0, 'rmct/truncated_frac': 0.53125, 'rmct/prefix_cache_hit_rate': 0.91711851278079, 'rollout/response_len/mean': 606.4285714285714, 'rollout/response_len/median': 647.0, 'rollout/response_len/max': 801, 'rollout/response_len/min': 313, 'rollout/zero_std/count_0.0': 1, 'rollout/prefix_cache_hit_rate': 0.0, 'rollout/avg_cached_tokens_per_sample': 0.0, 'rollout/repetition_frac': 0.0, 'rollout/truncated_ratio': 0.0, 'perf/rollout_time': 4.643876791000366, 'perf/tokens_per_gpu_per_sec': 1828.2138786397725, 'perf/longest_sample_tokens_per_sec': 172.4851963239644, 'perf/effective_tokens_per_gpu_per_sec': 1828.2138786397725, 'perf/longest_effective_sample_tokens_per_sec': 172.4851963239644}
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:33] Prefill batch, #new-seq: 1, #new-token: 34, #cached-token: 128, full token usage: 0.00, mamba usage: 0.08, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 7.51
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:33] Prefill batch, #new-seq: 21, #new-token: 583, #cached-token: 2964, full token usage: 0.00, mamba usage: 0.22, #running-req: 1, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 3086.18
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:33] Prefill batch, #new-seq: 42, #new-token: 839, #cached-token: 8844, full token usage: 0.00, mamba usage: 0.22, #running-req: 22, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 201869.88
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:33] Decode batch, #running-req: 64, #full token: 2825, full token usage: 0.00, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 2236.04, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:33] Decode batch, #running-req: 64, #full token: 5385, full token usage: 0.00, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15643.95, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:33] Decode batch, #running-req: 64, #full token: 7945, full token usage: 0.00, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14907.81, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] Decode batch, #running-req: 64, #full token: 10505, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14892.55, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] Decode batch, #running-req: 64, #full token: 13065, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15617.19, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] Decode batch, #running-req: 64, #full token: 15625, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15046.14, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48702 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48592 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] Decode batch, #running-req: 64, #full token: 17894, full token usage: 0.01, mamba num: 197, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15537.47, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] Decode batch, #running-req: 62, #full token: 20100, full token usage: 0.01, mamba num: 194, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 15095.33, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48704 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:49042 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48690 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48644 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48850 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] Decode batch, #running-req: 59, #full token: 21549, full token usage: 0.01, mamba num: 185, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 14423.91, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48844 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:34] INFO:     172.24.0.2:48674 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 55, #full token: 22347, full token usage: 0.01, mamba num: 173, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13260.43, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48970 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 54, #full token: 24123, full token usage: 0.02, mamba num: 170, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13331.92, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48608 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:49122 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:49058 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48842 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48754 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48688 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48678 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 48, #full token: 23448, full token usage: 0.01, mamba num: 152, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 12701.70, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:49072 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48906 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 46, #full token: 24353, full token usage: 0.02, mamba num: 146, mamba usage: 0.16, cuda graph: True, gen throughput (token/s): 12400.00, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:49100 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48654 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:49064 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 43, #full token: 24527, full token usage: 0.02, mamba num: 137, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 11702.42, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:49028 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 41, #full token: 25054, full token usage: 0.02, mamba num: 131, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 11265.89, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] INFO:     172.24.0.2:48732 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] INFO:     172.24.0.2:48632 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:35] Decode batch, #running-req: 40, #full token: 26072, full token usage: 0.02, mamba num: 128, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10329.18, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] Decode batch, #running-req: 39, #full token: 26981, full token usage: 0.02, mamba num: 125, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10367.39, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] Decode batch, #running-req: 39, #full token: 28541, full token usage: 0.02, mamba num: 125, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10644.33, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] INFO:     172.24.0.2:48652 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] Decode batch, #running-req: 38, #full token: 29368, full token usage: 0.02, mamba num: 122, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 10376.25, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] INFO:     172.24.0.2:48894 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] Decode batch, #running-req: 37, #full token: 30104, full token usage: 0.02, mamba num: 119, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 10331.48, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] Decode batch, #running-req: 37, #full token: 31584, full token usage: 0.02, mamba num: 119, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 10187.19, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] INFO:     172.24.0.2:48934 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:36] Decode batch, #running-req: 37, #full token: 33064, full token usage: 0.02, mamba num: 119, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 9810.70, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48820 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] Decode batch, #running-req: 35, #full token: 32718, full token usage: 0.02, mamba num: 113, mamba usage: 0.12, cuda graph: True, gen throughput (token/s): 9292.35, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] Decode batch, #running-req: 35, #full token: 34118, full token usage: 0.02, mamba num: 113, mamba usage: 0.12, cuda graph: True, gen throughput (token/s): 9606.72, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49026 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] Decode batch, #running-req: 34, #full token: 34516, full token usage: 0.02, mamba num: 110, mamba usage: 0.12, cuda graph: True, gen throughput (token/s): 9267.81, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48804 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48826 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] Decode batch, #running-req: 32, #full token: 33818, full token usage: 0.02, mamba num: 104, mamba usage: 0.11, cuda graph: True, gen throughput (token/s): 9343.69, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48770 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49004 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48736 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48878 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49060 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48612 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48966 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48606 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48950 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48710 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48626 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48932 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48888 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49114 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48996 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48922 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48786 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48672 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48862 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48992 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48982 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49054 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48910 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48836 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48902 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48782 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48798 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48742 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48724 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49020 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:49086 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] INFO:     172.24.0.2:48760 - "POST /generate HTTP/1.1" 200 OK
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:37] rmct_rollout.py:367 - RMCT step 4: 15 grad samples, parse_rate=0.500, gap=0.0286, cache_hit=0.89
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:37] rollout.py:670 - Save debug rollout data to /workspace/runs/dev_smoke/debug/rollout_3.pt
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:37] rollout.py:1306 - perf 3: {'rmct/parse_rate': 0.5, 'rmct/p_ref_mean': 0.3333333333333333, 'rmct/p_hat_mean': 0.36190476190476195, 'rmct/gap_mean': 0.02857142857142858, 'rmct/has_signal': 1.0, 'rmct/n_grad_samples': 15.0, 'rmct/completion_len_p50': 1024.0, 'rmct/completion_len_p99': 1024.0, 'rmct/truncated_frac': 0.5, 'rmct/prefix_cache_hit_rate': 0.8912783751493429, 'rollout/response_len/mean': 469.26666666666665, 'rollout/response_len/median': 444.0, 'rollout/response_len/max': 988, 'rollout/response_len/min': 247, 'rollout/zero_std/count_0.0': 1, 'rollout/prefix_cache_hit_rate': 0.0, 'rollout/avg_cached_tokens_per_sample': 0.0, 'rollout/repetition_frac': 0.0, 'rollout/truncated_ratio': 0.0, 'perf/rollout_time': 4.553926467895508, 'perf/tokens_per_gpu_per_sec': 1545.6990905812565, 'perf/longest_sample_tokens_per_sec': 216.95563311468695, 'perf/effective_tokens_per_gpu_per_sec': 1545.6990905812565, 'perf/longest_effective_sample_tokens_per_sec': 216.95563311468695}
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] Prefill batch, #new-seq: 1, #new-token: 64, #cached-token: 320, full token usage: 0.00, mamba usage: 0.03, #running-req: 0, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 14.90
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:37] Prefill batch, #new-seq: 6, #new-token: 332, #cached-token: 1984, full token usage: 0.00, mamba usage: 0.10, #running-req: 1, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 3221.84
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Prefill batch, #new-seq: 21, #new-token: 599, #cached-token: 4032, full token usage: 0.00, mamba usage: 0.20, #running-req: 7, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 5535.94
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Prefill batch, #new-seq: 31, #new-token: 700, #cached-token: 5568, full token usage: 0.00, mamba usage: 0.20, #running-req: 28, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 172849.98
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Decode batch, #running-req: 59, #full token: 3567, full token usage: 0.00, mamba num: 185, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 2933.45, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Decode batch, #running-req: 59, #full token: 5927, full token usage: 0.00, mamba num: 185, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 14212.12, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Prefill batch, #new-seq: 5, #new-token: 81, #cached-token: 896, full token usage: 0.00, mamba usage: 0.22, #running-req: 59, #queue-req: 0, #pending-token: 0, cuda graph: False, input throughput (token/s): 173.56
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Decode batch, #running-req: 64, #full token: 8438, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 9048.06, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Decode batch, #running-req: 64, #full token: 10998, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14664.99, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:38] Decode batch, #running-req: 64, #full token: 13558, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15349.74, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] Decode batch, #running-req: 64, #full token: 16118, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15343.91, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] Decode batch, #running-req: 64, #full token: 18678, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15454.53, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] Decode batch, #running-req: 64, #full token: 21238, full token usage: 0.01, mamba num: 200, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 15000.51, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] INFO:     172.24.0.2:48626 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] Decode batch, #running-req: 63, #full token: 23420, full token usage: 0.01, mamba num: 197, mamba usage: 0.22, cuda graph: True, gen throughput (token/s): 14684.84, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] INFO:     172.24.0.2:49064 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] INFO:     172.24.0.2:48760 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] Decode batch, #running-req: 62, #full token: 25540, full token usage: 0.02, mamba num: 194, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 14033.87, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] INFO:     172.24.0.2:48934 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:39] Decode batch, #running-req: 61, #full token: 27562, full token usage: 0.02, mamba num: 191, mamba usage: 0.21, cuda graph: True, gen throughput (token/s): 14167.71, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:49020 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48754 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] Decode batch, #running-req: 60, #full token: 28498, full token usage: 0.02, mamba num: 182, mamba usage: 0.20, cuda graph: True, gen throughput (token/s): 14350.91, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48710 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48742 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48862 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48804 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:49060 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48844 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] Decode batch, #running-req: 54, #full token: 28665, full token usage: 0.02, mamba num: 170, mamba usage: 0.19, cuda graph: True, gen throughput (token/s): 13763.76, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48732 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48770 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] Decode batch, #running-req: 51, #full token: 28561, full token usage: 0.02, mamba num: 158, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 13062.82, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48970 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48836 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] Decode batch, #running-req: 50, #full token: 30561, full token usage: 0.02, mamba num: 158, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 12176.01, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] Decode batch, #running-req: 48, #full token: 31245, full token usage: 0.02, mamba num: 152, mamba usage: 0.17, cuda graph: True, gen throughput (token/s): 11851.30, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48950 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] Decode batch, #running-req: 47, #full token: 32458, full token usage: 0.02, mamba num: 149, mamba usage: 0.16, cuda graph: True, gen throughput (token/s): 11425.86, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:40] INFO:     172.24.0.2:48966 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48782 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48982 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:49114 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 43, #full token: 31395, full token usage: 0.02, mamba num: 136, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 11815.30, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 43, #full token: 33115, full token usage: 0.02, mamba num: 136, mamba usage: 0.15, cuda graph: True, gen throughput (token/s): 11187.99, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48906 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48910 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 41, #full token: 33255, full token usage: 0.02, mamba num: 130, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 11137.16, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48798 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 40, #full token: 34059, full token usage: 0.02, mamba num: 127, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10731.64, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 40, #full token: 35659, full token usage: 0.02, mamba num: 127, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 10428.05, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 40, #full token: 37259, full token usage: 0.02, mamba num: 127, mamba usage: 0.14, cuda graph: True, gen throughput (token/s): 9964.91, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48932 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] INFO:     172.24.0.2:48786 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:41] Decode batch, #running-req: 38, #full token: 36959, full token usage: 0.02, mamba num: 121, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 10294.26, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] Decode batch, #running-req: 38, #full token: 38479, full token usage: 0.02, mamba num: 121, mamba usage: 0.13, cuda graph: True, gen throughput (token/s): 10182.03, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48724 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48992 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48672 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49054 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48902 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49086 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48878 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48888 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49004 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48606 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48612 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48996 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48736 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48922 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48826 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49026 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48820 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48894 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48652 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48632 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49028 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48654 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49100 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49072 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48678 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48688 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48842 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49058 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49122 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48608 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48674 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48850 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48644 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] Decode batch, #running-req: 38, #full token: 5114, full token usage: 0.00, mamba num: 18, mamba usage: 0.02, cuda graph: True, gen throughput (token/s): 9654.81, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] Decode batch, #running-req: 5, #full token: 5314, full token usage: 0.00, mamba num: 18, mamba usage: 0.02, cuda graph: True, gen throughput (token/s): 2248.60, #queue-req: 0
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48690 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:49042 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48704 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48592 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] INFO:     172.24.0.2:48702 - "POST /generate HTTP/1.1" 200 OK
+[36m(SGLangEngine pid=12892)[0m [2026-08-05 23:03:42] Decode batch, #running-req: 5, #full token: 5514, full token usage: 0.00, mamba num: 18, mamba usage: 0.02, cuda graph: True, gen throughput (token/s): 1936.63, #queue-req: 0
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:42] rmct_rollout.py:367 - RMCT step 5: 11 grad samples, parse_rate=0.406, gap=0.4056, cache_hit=0.88
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:42] rollout.py:670 - Save debug rollout data to /workspace/runs/dev_smoke/debug/rollout_4.pt
+[36m(RolloutManager pid=12737)[0m [2026-08-05 23:03:42] rollout.py:1306 - perf 4: {'rmct/parse_rate': 0.40625, 'rmct/p_ref_mean': 0.15, 'rmct/p_hat_mean': 0.5555555555555555, 'rmct/gap_mean': 0.4055555555555555, 'rmct/has_signal': 1.0, 'rmct/n_grad_samples': 11.0, 'rmct/completion_len_p50': 1024.0, 'rmct/completion_len_p99': 1024.0, 'rmct/truncated_frac': 0.59375, 'rmct/prefix_cache_hit_rate': 0.8781558726673985, 'rollout/response_len/mean': 595.5454545454545, 'rollout/response_len/median': 539.0, 'rollout/response_len/max': 910, 'rollout/response_len/min': 437, 'rollout/prefix_cache_hit_rate': 0.0, 'rollout/avg_cached_tokens_per_sample': 0.0, 'rollout/repetition_frac': 0.0, 'rollout/truncated_ratio': 0.0, 'perf/rollout_time': 4.94228720664978, 'perf/tokens_per_gpu_per_sec': 1325.499657564562, 'perf/longest_sample_tokens_per_sec': 184.12527681022004, 'perf/effective_tokens_per_gpu_per_sec': 1325.499657564562, 'perf/longest_effective_sample_tokens_per_sec': 184.12527681022004}
+2026-08-05 23:03:48,395	INFO sdk.py:519 -- WebSocket closed for job raysubmit_qn6cxKuF9nTVRvd5 with close code 1000
+
+[32m------------------------------------------[39m
+[32mJob 'raysubmit_qn6cxKuF9nTVRvd5' succeeded[39m
+[32m------------------------------------------[39m
+
+RUN_EXIT=0

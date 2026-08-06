@@ -1,0 +1,25 @@
+{
+  "_comment": "Miles parity tier (Phase 4 gate): Qwen3.5-4B, 1 GPU, smoke settings \u2014 NOT science values. Mirrors dev_smoke.json used for the slime Phase 3 gates so the Miles numbers are comparable. max_new_tokens 4096: the 4B thinking model needs >1024 tokens to reach a parseable answer.",
+  "data_paths": [
+    "/workspace/rmct/data/dev_smoke/suggested-answer-pairs.jsonl"
+  ],
+  "n_datapoints": 8,
+  "n_ref_rollouts": 16,
+  "n_train_rollouts": 16,
+  "batch_size": 4,
+  "n_epochs": 1,
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "top_k": -1,
+  "max_new_tokens": 4096,
+  "kl_coef": 0.05,
+  "unparsed_handling": "discard",
+  "rollout_dir": "/workspace/runs/parity_4b/rollouts",
+  "seed": 42,
+  "control": false,
+  "advantage": {
+    "advantage_estimator": "grpo_normalized",
+    "normalization": "per_item",
+    "anchor_weight": 0.0
+  }
+}

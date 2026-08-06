@@ -1,0 +1,25 @@
+{
+  "_comment": "Qwen3.5-9B science run (Phase 4). Rate-matching values frozen from experiments/rmct_paper_vast_more_methods/experiment.yaml rate_matching + data.training. Deviations from the paper artifact are recorded in phase0_report.md (D1 model/full-param, D7 learning rate). Data artifact is the wrong_argument training pairs — must be the frozen paper artifact or an approved rebuild; path below is where it lands on the pod.",
+  "data_paths": [
+    "/workspace/rmct/data/run_9b/wrong-argument-pairs-64.jsonl"
+  ],
+  "n_datapoints": 64,
+  "n_ref_rollouts": 128,
+  "n_train_rollouts": 128,
+  "batch_size": 4,
+  "n_epochs": 1,
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "top_k": -1,
+  "max_new_tokens": 20480,
+  "kl_coef": 0.05,
+  "unparsed_handling": "discard",
+  "rollout_dir": "/workspace/runs/run_9b/rollouts",
+  "seed": 42,
+  "control": false,
+  "advantage": {
+    "advantage_estimator": "grpo_normalized",
+    "normalization": "per_item",
+    "anchor_weight": 0.0
+  }
+}

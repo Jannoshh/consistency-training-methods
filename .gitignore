@@ -34,3 +34,8 @@ _archive/legacy_ctm_settings/
 _archive/mcq_bias_tests/
 _archive/macos_metadata/
 _archive/mcq_bias_smoke_test.py
+
+# remote-kernels notebook output
+remote-kernels/
+remote-kernels.toml
+experiments/rmct_slime_qwen/data/

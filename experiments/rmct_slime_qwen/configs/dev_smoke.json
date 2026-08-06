@@ -1,0 +1,23 @@
+{
+  "_comment": "Dev-tier bring-up smoke config (Phase 3). NOT science settings: tiny rollout counts, short generations, template-bias fixture data. The 9B run config derives from experiments/rmct_paper_vast_more_methods rate_matching values instead.",
+  "data_paths": ["/workspace/rmct/data/dev_smoke/suggested-answer-pairs.jsonl"],
+  "n_datapoints": 8,
+  "n_ref_rollouts": 8,
+  "n_train_rollouts": 8,
+  "batch_size": 4,
+  "n_epochs": 1,
+  "temperature": 1.0,
+  "top_p": 1.0,
+  "top_k": -1,
+  "max_new_tokens": 1024,
+  "kl_coef": 0.05,
+  "unparsed_handling": "discard",
+  "rollout_dir": "/workspace/runs/dev_smoke/rollouts",
+  "seed": 42,
+  "control": false,
+  "advantage": {
+    "advantage_estimator": "grpo_normalized",
+    "normalization": "per_item",
+    "anchor_weight": 0.0
+  }
+}
