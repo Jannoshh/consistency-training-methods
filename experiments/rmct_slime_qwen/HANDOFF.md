@@ -82,17 +82,20 @@ this alongside `phase0_report.md` (deviation table D1–D12) and `README.md`
 
 ## Open decisions / next steps
 
-1. **8-GPU shakeout** (~$15, 30 min): 2-step full-param 9B on 8× H200 —
-   measures DP-engine scaling and the FP8 logprob-parity gate. Do this before
-   any long run.
-2. **Long run** (user floated 100 steps × 8 GPUs): ≈ $250–350 synchronous,
-   $190–260 with Phase 5 async overlap. Needs a decision on what 100 steps
-   means (6 epochs over the paper's 64 datapoints vs 1 epoch over ~400 —
-   both are recorded science changes) and a budget approval.
-3. **LoRA arm**: wait for/nudge upstream on bug 3 above, or accept full-param.
-4. **Phase 5 remaining**: async rollout/training overlap, tail elimination
-   (the p99-completion stragglers), verified FP8 sampling parity.
-5. **Phase 6**: object-storage checkpoint sync, restart.sh drill on Miles.
+1. ~~Multi-GPU shakeout~~ **DONE** (4× H200, README Phase 5 section): Gate A+B
+   hold at 9B science scale; 234s/step warm; FP8 KV rejected (2× parity cost,
+   ~3% speed); measured cost model: 100 steps ≈ $120 on 4× H200 sync.
+2. **Long run**: needs (a) what 100 steps means — 6 epochs over the paper's 64
+   datapoints vs 1 epoch over ~400 converted rows (both recorded science
+   changes) — and (b) the Miles end-of-run save crash fixed first (below).
+3. **NEW Miles bug (blocks long runs)**: distributed checkpoint save at
+   TP2×DP2 fails validation ("rank args Namespace mismatch"). Benchmarks use
+   NOSAVE=1; science runs need checkpoint_every=8, so fix/workaround first.
+4. **LoRA arm**: wait for/nudge upstream on the bshd+GDN actor-forward bug,
+   or accept full-param (parity-verified everywhere).
+5. **Phase 5 remaining**: async rollout/training overlap (targets the 150s
+   generation wait per step), tail elimination of p99 stragglers.
+6. **Phase 6**: object-storage checkpoint sync, restart.sh drill on Miles.
 
 ## Cost log
 
