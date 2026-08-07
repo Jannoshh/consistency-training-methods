@@ -109,6 +109,17 @@ this alongside `phase0_report.md` (deviation table D1–D12) and `README.md`
    resume adapter saves (silent fresh start without the tracker file, format
    error with it). Object-storage checkpoint sync still open.
 
+## 2026-08-07: migration to verl (supersedes the Miles LoRA arm)
+
+Miles' LoRA step time proved structural (Megatron has no packed-GDN, bshd
+forces micro-batch 1 → ~81 min/step). verl-FSDP is the only stack with both
+packed-GDN training and LoRA; it was derisked (`verl_derisk.md`), smoke-tested
+at 9B LoRA (all gates passed, logprob agreement 5× tighter than our Megatron
+numbers), and RMCT is ported as an external verl recipe with bitwise Gate A
+parity and a successful end-to-end GPU run — see `../rmct_verl/README.md`.
+The Miles stack in this directory remains the parity-verified fallback and
+the source of the vendored RMCT math.
+
 ## Cost log
 
 Dev slime pod (Phase 3): ~$10. Miles debugging + benches (Phase 4): ~$23 of a
