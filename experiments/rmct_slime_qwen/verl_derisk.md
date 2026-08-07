@@ -110,10 +110,38 @@ One cheap pod (1× H100/H200), stock verl GRPO example — NOT the RMCT port:
 4. If red on #1 after the transformers pin → verl is out; fall back to the
    Miles micro-batch>1 probe.
 
+## SMOKE TEST RESULT (2026-08-07, 1× H200, $7.38 total): **PASS — GO for migration**
+
+10-step GRPO+LoRA on Qwen3.5-9B, FSDP2 + vLLM 0.18.1, stock gsm8k. All three
+gates cleared:
+
+| gate | result |
+|---|---|
+| illegal memory access (verl#6549) | **none** in 10 steps (transformers 5.10.4 carries the position_ids fix) |
+| LoRA rollout collapse at steps 2–3 | **absent** — rewards stable then RISING (0.17→0.34), response_length stable ~960–1000 |
+| grad_norm | 0.04–0.05 throughout, no NaN/zero |
+
+Extras: `rollout_probs_diff_mean ≈ 0.0026` (sampling↔training logprob
+agreement — 5× tighter than our Miles Gate B 0.014); warm step 115s at
+smoke shape (gen 14.5s, logprobs 33.5s, update_actor 51.3s, merged weight
+sync 14.2s); LoRA-only checkpoints 353 MB; ran on verl's **v1 TransferQueue
+trainer** (default) — the RMCT recipe must either pin `trainer.use_v1=false`
+or target the v1 override surface.
+
+Environment lessons (encoded in `/workspace/verl_cache` on the RunPod volume:
+built flash-attn wheel, pip freeze, train script, full log):
+- CUDA-13 wheels (vLLM ≥0.20, the verlai/verl:vllm024 image) need driver
+  ≥580; on a driver-570 pod use **vLLM 0.18.1 + torch 2.10.0+cu128**.
+- flash-attn has no prebuilt wheel past torch 2.8 — source build with
+  **MAX_JOBS≤8** (32 parallel nvcc jobs hit the container cgroup OOM killer).
+- LoRA target regex verified on the real checkpoint:
+  `.*language_model\.layers\.[0-9]+\.(self_attn\.[qkvo]_proj|mlp\.(gate|up|down)_proj)`
+  (128 of 359 linears matched, zero GDN/vision hits; model class resolves to
+  AutoModelForImageTextToText).
+
 ## Bottom line
 
-Not a desk rejection and not a green light: verl uniquely offers the
-packed+LoRA combination that would dissolve our step-time problem, but it has
-an open crash report at our exact model size and an unexplained LoRA failure
-mode. Both are cheaply falsifiable in one ~$5–10 smoke run, which should
-happen before any porting effort.
+verl-FSDP+vLLM is validated for Qwen3.5-9B LoRA RL: the two crash-classes
+did not manifest, logprob agreement beats our Megatron numbers, and packing
+works. Migration (RMCT recipe port) is in progress; remaining risks are
+ordinary porting work, not framework viability.
