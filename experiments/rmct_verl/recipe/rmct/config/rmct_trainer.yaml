@@ -1,0 +1,72 @@
+# RMCT hydra overlay on verl's ppo_trainer config (verl @ 2b0fe51).
+#
+# The searchpath is relative to the process CWD, so launch from the verl clone
+# root (see README) or replace it with an absolute file:// path.
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# ── RMCT block, read by RayRMCTTrainer ───────────────────────────────────────
+rmct:
+  # KL vs the frozen base, tinker semantics (batch-centered, per token).
+  # Paper/run_9b value: 0.05. 0.0 disables the term entirely.
+  kl_coef: 0.05
+  # Which log-probs stand in for log pi_theta in the KL term.
+  #   old_log_probs     — verl's recomputed actor log-probs (default here)
+  #   rollout_log_probs — the sampler's own log-probs, what the Miles/slime port
+  #                       used; needs actor_rollout_ref.rollout.calculate_log_probs=True
+  kl_logprob_source: old_log_probs
+  # slime_port.pipeline.AdvantageConfig, field for field.
+  advantage_estimator: grpo_normalized   # grpo_normalized | snr_scaling | matched_pair
+  normalization: per_item                # per_item | pooled
+  anchor_weight: 0.0                     # > 0 unsupported (needs the base-rate measurement port)
+  snr_mode: soft
+  snr_z: 2.0
+  snr_normalizer: trait_std
+  var_floor: 0.01
+  pseudocount: 1.0
+
+# ── verl switches RMCT depends on ────────────────────────────────────────────
+algorithm:
+  # verl's GRPO advantages are computed and then overwritten by
+  # RayRMCTTrainer._update_actor. adv_estimator only has to be something whose
+  # advantage pass does not crash on all-zero rewards.
+  adv_estimator: grpo
+  # RMCT owns the KL term; both of verl's KL paths must stay off.
+  use_kl_in_reward: False
+
+actor_rollout_ref:
+  actor:
+    use_kl_loss: False
+  rollout:
+    # One rollout population per (datapoint, variant) row.
+    n: 128
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    mode: async
+    agent:
+      agent_loop_config_path: recipe/rmct/config/agent_loop.yaml
+
+data:
+  # The agent loop reads kwargs["raw_prompt"], built from this column.
+  prompt_key: prompt
+  return_raw_chat: True
+  shuffle: False
+
+trainer:
+  # RMCT overrides the V0 RayPPOTrainer._update_actor. verl's default is
+  # use_v1: true, which routes to the TransferQueue trainer in
+  # verl/trainer/ppo/v1/ and would silently ignore this recipe's trainer.
+  use_v1: False
+  project_name: rmct_verl
+  # Per-step persistence of every sampled response (RMCT's provenance
+  # requirement is config, not code, on this stack).
+  rollout_data_dir: null
+  balance_batch: False
+  val_before_train: False
+  test_freq: -1

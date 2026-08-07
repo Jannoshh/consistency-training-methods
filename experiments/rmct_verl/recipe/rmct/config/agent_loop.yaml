@@ -1,0 +1,5 @@
+# Registers the RMCT agent loop in every AgentLoopWorker Ray actor without
+# relying on an import side effect. Referenced by
+# actor_rollout_ref.rollout.agent.agent_loop_config_path.
+- name: rmct
+  _target_: recipe.rmct.rmct_agent_loop.RMCTAgentLoop
