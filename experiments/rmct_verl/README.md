@@ -36,8 +36,46 @@ standard fields only — the per-sample `variant`/`p_ref`/`p_hat`/`parse_ok`
 extras are not yet threaded into `reward_extra_infos_dict`. Fix before
 using dumps for Gate A replay.
 
-Next: LoRA-arm bring-up at 9B science shape (the smoke's LoRA block +
-this recipe), then step-time comparison vs Miles' 81 min baseline.
+## 9B LoRA science-shape step time (2026-08-07, 1× H200, MEASURED)
+
+RMCT recipe + LoRA (r32/α64, attn+MLP regex, merge-mode sync) at the exact
+paper shape — 4 datapoints × (128 ref + 128 train) rollouts per step,
+max_response 20,480, packing + dynamic batching (40,960-token ceilings),
+prefix caching on:
+
+| phase | step 1 (cold) | step 2 (warm) |
+|---|---:|---:|
+| generation | 966s | 851s |
+| policy logprobs | 338s | 267s |
+| ref logprobs | 250s | 232s |
+| update_actor | 964s | 829s |
+| merged weight sync | 14s | 14s |
+| **total step** | **2,537s (42.3 min)** | **2,197s (36.6 min)** |
+
+~5.7–6.2M generated tokens/step (mean response ~5.1–5.6k), overall step
+throughput ~2,600 tok/s on the single GPU. Health at science shape:
+rollout_probs_diff_mean 0.0041–0.0044, grad_norm 0.014–0.016, nonzero
+pg_loss.
+
+**Comparison (identical config, data, and workload):**
+
+| stack | wall/step | hardware | GPU-min/step |
+|---|---:|---|---:|
+| Miles Megatron LoRA (bshd, micro-batch 1) | 81 min | 2× H200 | 162 |
+| **verl FSDP LoRA (packed)** | **36.6 min** | **1× H200** | **36.6** |
+
+**4.4× cheaper per GPU, 2.2× faster wall-clock on half the hardware.** A
+64-step run (1 epoch × 16 steps × 4 epochs equivalent of the RMCT-256-style
+budget math) extrapolates to ~39 GPU-hours ≈ $180 on one H200 at $4.59/hr,
+vs ~$650 Miles-equivalent. Obvious further levers: DP over 2–4 GPUs
+(near-linear for every phase), and update_actor (38% of step) still runs
+full gradient checkpointing.
+
+Measurement caveats: rank 32 (verl-recommended) vs the paper's r8 — timing-
+irrelevant, but a science run must record the deviation; driver-550 pod, so
+the stack was vLLM 0.18.1 + torch 2.10/cu128 exactly as in the notes.
+Log: RunPod volume `/workspace/verl_cache/rmct_lora_science_measure.log`
+(volume is per-pod — copy off before terminating).
 
 ```
 Pinned verl:  2b0fe51   ("[rocm] feat: enable DeepSeek-V4-Flash GRPO on AMD GPUs (#7050)")
