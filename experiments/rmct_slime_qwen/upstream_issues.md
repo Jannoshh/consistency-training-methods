@@ -28,6 +28,24 @@ commands use `scripts/run_miles.sh` from this experiment dir; logs in
   (compare fsdp fix eba5ff5 "apply the GDN packing patch to dense qwen3_5",
   which has no Megatron-backend counterpart).
 
+## 1b. [miles] Bridge-LoRA actor silently zero-loads the language model (root cause of #1's uniform logits)
+
+Full causal chain, all verified by weight-norm bisection:
+- `_setup_lora_model_via_bridge` builds with `load_weights=False`; with our
+  P3 (`load_weights=True`) the model is healthy post-build (embedding norm
+  328.5, generates correctly).
+- Miles defaults `args.load` to the base torch_dist conversion when unset;
+  that conversion carries `latest_checkpointed_iteration.txt`, so
+  `initialize_model_and_optimizer`'s load block treats it as resumable.
+- Loading it into the bridge-built model cannot be name-mapped and silently
+  ZEROES the language weights — the (tied) word embedding first — leaving
+  exactly-uniform logits (−log V) and zero grad_norm (all PPO ratios clip).
+- `load_other_checkpoint("ref", args.ref_load)` does the same for the ref.
+Fixes P5/P6/P7 in `scripts/apply_patches.py`; with them, LoRA training is
+healthy (abs_diff 0.013, nonzero grads). Suggested upstream fixes: hard-error
+on unmappable loads instead of silent zeroing; don't default `--load` to
+`--ref-load` for bridge-LoRA runs.
+
 ## 2. [miles] mbridge base-weight export garbles dense Qwen3.5
 
 - `--megatron-to-hf-mode bridge` `update_weights` pushes corrupted base

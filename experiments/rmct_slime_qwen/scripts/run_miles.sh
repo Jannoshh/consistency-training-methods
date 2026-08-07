@@ -49,7 +49,13 @@ fi
 
 # Resume-aware load (see run_dev_2b.sh: base conversion carries iteration=1,
 # so fresh runs must pin --start-rollout-id 0).
-if [ -f "${RUN_DIR}/checkpoints/latest_checkpointed_iteration.txt" ]; then
+if [ -n "${LOAD_DIR_OVERRIDE:-}" ]; then
+   # e.g. the HF checkpoint dir: bridge-built LoRA models cannot load the
+   # spec-converted torch_dist (parameter structure differs — silent zero
+   # load, uniform logits); bridge mode supports loading HF directly.
+   LOAD_DIR="${LOAD_DIR_OVERRIDE}"
+   START_ARGS=(--start-rollout-id 0)
+elif [ -f "${RUN_DIR}/checkpoints/latest_checkpointed_iteration.txt" ]; then
    LOAD_DIR="${RUN_DIR}/checkpoints"
    START_ARGS=()
 else
@@ -60,9 +66,17 @@ fi
 CKPT_ARGS=(
    --hf-checkpoint "${MODEL_DIR}"
    --ref-load "${MODEL_DIR}_torch_dist"     # frozen base = KL reference
-   --load "${LOAD_DIR}"
    "${START_ARGS[@]}"
 )
+if [ "${LORA:-0}" = "1" ] && [ ! -f "${RUN_DIR}/checkpoints/latest_checkpointed_iteration.txt" ] && [ -z "${LOAD_DIR_OVERRIDE:-}" ]; then
+   # Fresh LoRA runs: NO --load. The bridge-built model self-loads HF weights
+   # at construction (patch P3); the Megatron checkpoint-load path cannot map
+   # this model and silently zeroes the language side. --load returns for
+   # resume (adapter checkpoints).
+   :
+else
+   CKPT_ARGS+=(--load "${LOAD_DIR}")
+fi
 if [ "${NOSAVE:-0}" != "1" ]; then
    # NOSAVE=1 for benchmark/diagnostic runs: skips checkpointing entirely.
    CKPT_ARGS+=(--save "${RUN_DIR}/checkpoints" --save-interval "${SAVE_INTERVAL:-8}")
@@ -179,8 +193,16 @@ MISC_ARGS=(
    --accumulate-allreduce-grads-in-fp32
    --attention-softmax-in-fp32
    --attention-backend flash
-   --colocate
 )
+# COLOCATE=0: disaggregated actor/rollout GPUs (no sleep/wake offload cycle).
+if [ "${COLOCATE:-1}" = "1" ]; then
+   MISC_ARGS+=(--colocate)
+   ACTOR_GPUS="${NUM_GPUS}"
+   ROLLOUT_GPUS="${NUM_GPUS}"
+else
+   ACTOR_GPUS="${ACTOR_GPUS:-$(( NUM_GPUS / 2 ))}"
+   ROLLOUT_GPUS="${ROLLOUT_GPUS:-$(( NUM_GPUS - ACTOR_GPUS ))}"
+fi
 
 # Escape hatch for one-off experiment flags (space-separated).
 read -r -a EXTRA <<< "${EXTRA_ARGS:-}"
@@ -208,8 +230,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 "${SLIME_DIR}/train.py" \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node "${NUM_GPUS}" \
-   --rollout-num-gpus "${NUM_GPUS}" \
+   --actor-num-gpus-per-node "${ACTOR_GPUS}" \
+   --rollout-num-gpus "${ROLLOUT_GPUS}" \
    "${MODEL_ARGS[@]}" \
    "${CKPT_ARGS[@]}" \
    "${LORA_ARGS[@]}" \
