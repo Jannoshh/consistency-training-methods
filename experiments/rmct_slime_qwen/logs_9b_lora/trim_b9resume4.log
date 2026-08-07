@@ -1,0 +1,21 @@
++ RMCT_DIR=/workspace/rmct
++ export RMCT_CONFIG=/workspace/rmct/configs/b9tiny.json
++ RMCT_CONFIG=/workspace/rmct/configs/b9tiny.json
++ RMCT_ARGS=(--rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-megatron-init-path slime_port.miles_init.megatron_init --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --calculate-per-token-loss --kl-coef 0.0 --use-kl-loss --kl-loss-coef 0.0)
++ ROLLOUT_ARGS=(--prompt-data "${PROMPT_DATA:-${RMCT_DIR}/data/run_9b/wrong-argument-pairs-64.jsonl}" --input-key unbiased_messages --apply-chat-template --num-rollout "${NUM_ROLLOUT}" --rollout-batch-size "${ROLLOUT_BATCH:-4}" --n-samples-per-prompt "${N_SAMPLES:-128}" --rollout-max-response-len "${MAX_RESPONSE_LEN:-20480}" --rollout-temperature 1.0 --global-batch-size "$(( ${ROLLOUT_BATCH:-4} * ${N_SAMPLES:-128} ))")
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9tiny.json",
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9tiny.json",
+[36m(MegatronTrainRayActor pid=74727)[0m [2026-08-07 04:44:48.133 actor_cell0_rank1] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+ray.exceptions.RayTaskError(AssertionError): [36mray::MegatronTrainRayActor.init()[39m (pid=74727, ip=172.23.0.2, actor_id=a698073de5f500f70ed0e04702000000, repr=<miles.backends.megatron_utils.actor.MegatronTrainRayActor object at 0x7ecf8c1d2720>)
+AssertionError: OptimizerParamScheduler: class input value 64 and checkpointvalue 96 for total number of iterations do not match
+[36m(MegatronTrainRayActor pid=74604)[0m [2026-08-07 04:45:04.922 actor_cell0_rank0] model.py:965 - RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights
+[36m(MegatronTrainRayActor pid=74604)[0m [2026-08-07 04:45:04.945 actor_cell0_rank0] lora_utils.py:574 - Loaded 128 adapter tensors from Megatron-native checkpoint: /root/runs/b9lora/checkpoints/iter_0000000/adapter/adapter_megatron_rank0.pt
+[36m(MegatronTrainRayActor pid=74604)[0m [2026-08-07 04:45:04.960 actor_cell0_rank0] lora_utils.py:612 - Restored optimizer state from LoRA checkpoint
+[36m(MegatronTrainRayActor pid=74604)[0m AssertionError: OptimizerParamScheduler: class input value 64 and checkpointvalue 96 for total number of iterations do not match
+[36m(MegatronTrainRayActor pid=74604)[0m [2026-08-07 04:44:48.162 actor_cell0_rank0] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+[36m(MegatronTrainRayActor pid=74727)[0m [2026-08-07 04:45:04.915 actor_cell0_rank1] model.py:965 - RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights
+[36m(MegatronTrainRayActor pid=74727)[0m [2026-08-07 04:45:04.943 actor_cell0_rank1] lora_utils.py:574 - Loaded 128 adapter tensors from Megatron-native checkpoint: /root/runs/b9lora/checkpoints/iter_0000000/adapter/adapter_megatron_rank1.pt
+[36m(MegatronTrainRayActor pid=74727)[0m [2026-08-07 04:45:04.958 actor_cell0_rank1] lora_utils.py:612 - Restored optimizer state from LoRA checkpoint
+[36m(MegatronTrainRayActor pid=74727)[0m AssertionError: OptimizerParamScheduler: class input value 64 and checkpointvalue 96 for total number of iterations do not match
+[36m(MegatronTrainRayActor pid=74727)[0m AssertionError: OptimizerParamScheduler: class input value 64 and checkpointvalue 96 for total number of iterations do not match
+RUN_EXIT=1

@@ -42,8 +42,15 @@ this alongside `phase0_report.md` (deviation table D1–D12) and `README.md`
    fixed (resume load path, skipped generation 0, writer overwrite on
    regenerated steps, D6 loss-reduction mismatch → `--calculate-per-token-loss`).
 2. **Phase 4 (Miles, Qwen3.5-4B/9B, 1× H200)**: framework switched for LoRA
-   support (D10). Full-param loop parity-verified (Gates A+B). LoRA blocked
-   upstream (D11). Throughput baseline measured (README table).
+   support (D10). Full-param loop parity-verified (Gates A+B). Throughput
+   baseline measured (README table).
+3. **LoRA unblock (2026-08-07)**: root-caused the uniform-logits failure to
+   Miles zero-loading language weights on bridge-LoRA runs; fixed via
+   `apply_patches.py` P3/P5/P6/P7. Verified at 4B and at 9B/TP2 science shape
+   (abs_diff 0.0141, nonzero grads, 45 MB adapter checkpoints; README
+   "9B LoRA baseline" section). TP1 on 2× H200 OOMs; TP2 required. Caveat:
+   ~81 min/step — micro-batch 1 (forced by bshd) serializes the train pass;
+   micro-batch >1 unprobed.
 
 ## Upstream bugs found (candidates for filing against radixark/miles & sglang-miles)
 
@@ -88,24 +95,23 @@ this alongside `phase0_report.md` (deviation table D1–D12) and `README.md`
 2. **Long run**: needs (a) what 100 steps means — 6 epochs over the paper's 64
    datapoints vs 1 epoch over ~400 converted rows (both recorded science
    changes) — and (b) the Miles end-of-run save crash fixed first (below).
-3. **NEW Miles bug (blocks long runs)**: distributed checkpoint save at
-   TP2×DP2 fails validation ("rank args Namespace mismatch"). Benchmarks use
-   NOSAVE=1; science runs need checkpoint_every=8, so fix/workaround first.
-4. **LoRA arm (the arm the user wants): definitively blocked upstream.**
-   Probe evidence (2026-08-06, `upstream_issues.md` #1): under the only
-   runnable LoRA config (bshd), the Megatron actor forward returns UNIFORM
-   logits (every logprob = -log(vocab) = -12.422) — the dense-Qwen3.5 LoRA
-   model path is non-functional, not merely drifted. thd is hard-rejected
-   for LoRA ("GDN does not support packed sequence"), and full-param+bshd
-   asserts. Options: file the drafted issues + track upstream (dense GDN
-   fixes are actively landing there), authorize a deeper self-patch effort
-   (uncertain, deep Megatron surgery), or run science on the parity-verified
-   full-param arm meanwhile.
-5. **Phase 5 remaining**: async rollout/training overlap (targets the 150s
-   generation wait per step), tail elimination of p99 stragglers.
-6. **Phase 6**: object-storage checkpoint sync, restart.sh drill on Miles.
+3. ~~Miles DP>1 save crash~~ **FIXED** (`apply_patches.py` P1); saves verified.
+4. ~~LoRA arm blocked~~ **UNBLOCKED** (see "What was verified" #3). Remaining
+   LoRA work: attack the ~81 min/step (micro-batch >1 under bshd, or upstream
+   LoRA+thd fix), and file the drafted upstream issues (`upstream_issues.md`).
+5. **Phase 5 remaining**: async rollout/training overlap requires porting the
+   rollout fn to Miles' class-based API (`--fully-async` forbids
+   `--rollout-function-path`); tail elimination of p99 stragglers.
+6. **Phase 6**: kill/resume drill DONE (README "Phase 6 durability"): LoRA
+   resume works via `LORA_ADAPTER_PATH` + patch P8 (adapter + optimizer state
+   restored, verified), but the resumed run's next SGLang weight push hits a
+   CUDA device-side assert — root-cause before long runs. `--load` cannot
+   resume adapter saves (silent fresh start without the tracker file, format
+   error with it). Object-storage checkpoint sync still open.
 
 ## Cost log
 
 Dev slime pod (Phase 3): ~$10. Miles debugging + benches (Phase 4): ~$23 of a
 $30 cap (includes one ~$9 idle SSH-outage mistake — keep-alives now standard).
+LoRA unblock + 4B/9B verification (2× H200): ~$40 window. 9B LoRA baseline +
+durability drill (2× H200 @ $9.18/hr): ~$18 of a $20 window.

@@ -65,6 +65,28 @@ on unmappable loads instead of silent zeroing; don't default `--load` to
   garbles generation instead of crashing. MLP-only targets (uniform shapes)
   serve correctly (zero-adapter output byte-identical to base).
 
+## 5. [miles] LoRA adapter checkpoints cannot be resumed through the normal load path
+
+Evidence 2026-08-07, 9B bridge-LoRA on 2× H200 (TP2), logs in `logs_9b_lora/`.
+
+- `save_checkpoint_with_lora` writes `iter_N/adapter/` but never
+  `latest_checkpointed_iteration.txt` → a later run with `--load <ckpt_dir>`
+  finds nothing and silently starts fresh (start_rollout_id=0, prior rollout
+  records superseded). Creating the tracker manually instead crashes the
+  generic loader: "NotImplementedError: unknown checkpoint format in iter_N".
+- The working mechanism is `--lora-adapter-path <iter_N>/adapter`
+  (Megatron-native per-rank shards + `training_state_rank*.pt`), but for
+  bridge-LoRA runs the flag is consumed inside the very `load_checkpoint`
+  call that must be skipped (see issue 1b) — our patch P8 calls
+  `load_lora_adapter` directly in that branch. Verified: 128 adapter tensors
+  per rank + optimizer state restore, training proceeds. Shape-changed
+  resumes additionally need `--override-opt-param-scheduler`.
+- Remaining bug: on the resumed run's second rollout, the SGLang engine dies
+  with a CUDA device-side assert during the adapter weight push
+  (`torch_memory_saver` free assert; router then 503s). Fresh-start runs
+  survive the identical update_weights path, so the assert is specific to
+  pushing a resumed adapter.
+
 ## 4. [miles/Megatron] dist-ckpt save at DP>1 rejects args Namespace over `rank`
 
 - Every multi-rank save fails common-state validation: "Mismatched keys:

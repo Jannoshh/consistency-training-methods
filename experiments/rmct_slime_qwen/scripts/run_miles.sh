@@ -125,6 +125,19 @@ if [ "${LORA:-0}" = "1" ]; then
       # flag only adapters flow through export_adapter_weights.
       --lora-base-cpu-backup
    )
+   # LoRA resume: Miles' adapter-only saves (iter_*/adapter/) are NOT loadable
+   # via --load — the generic Megatron loader raises "unknown checkpoint
+   # format" (and without latest_checkpointed_iteration.txt, which adapter
+   # saves never write, --load silently starts fresh). The intended path is
+   # --lora-adapter-path pointing at the adapter dir; it restores adapter
+   # weights AND optimizer/scheduler state from training_state_rank*.pt.
+   # Requires apply_patches.py P8 (upstream consumes the flag inside the
+   # load_checkpoint branch that P5 must skip). If the resume run's total
+   # iteration count differs from the saved one (e.g. resuming at a reduced
+   # shape), add EXTRA_ARGS=--override-opt-param-scheduler.
+   if [ -n "${LORA_ADAPTER_PATH:-}" ]; then
+      LORA_ARGS+=(--lora-adapter-path "${LORA_ADAPTER_PATH}")
+   fi
 fi
 
 RMCT_ARGS=(

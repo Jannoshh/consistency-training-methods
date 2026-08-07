@@ -33,6 +33,16 @@ pip install --no-deps "${MCQ_BIAS_PIN}"
 pip install zstandard
 
 # 2. Model download + HF->Megatron conversion (skip when present).
+# The container disk is wiped on pod stop; a cache on the persistent volume
+# turns re-setup from ~15 min of downloads into ~2 min of local copies.
+CACHE_ROOT=${CACHE_ROOT:-/workspace/models_cache}
+if [ ! -d "${MODEL_DIR}" ] && [ -d "${CACHE_ROOT}/$(basename "${MODEL}")" ]; then
+    mkdir -p "${MODELS_ROOT}"
+    cp -r "${CACHE_ROOT}/$(basename "${MODEL}")" "${MODEL_DIR}"
+fi
+if [ ! -d "${MODEL_DIR}_torch_dist" ] && [ -d "${CACHE_ROOT}/$(basename "${MODEL}")_torch_dist" ]; then
+    cp -r "${CACHE_ROOT}/$(basename "${MODEL}")_torch_dist" "${MODEL_DIR}_torch_dist"
+fi
 if [ ! -d "${MODEL_DIR}" ]; then
     hf download "${MODEL}" --local-dir "${MODEL_DIR}"
 fi
@@ -76,5 +86,12 @@ fi
     echo "---pip-freeze---"
     pip freeze
 } > "${RMCT_DIR}/env.lock"
+
+# 5. Refresh the volume cache (best effort; volume may be smaller than models).
+mkdir -p "${CACHE_ROOT}" 2>/dev/null || true
+for d in "${MODEL_DIR}" "${MODEL_DIR}_torch_dist"; do
+    b="${CACHE_ROOT}/$(basename "${d}")"
+    [ -d "${d}" ] && [ ! -d "${b}" ] && cp -r "${d}" "${b}" 2>/dev/null || true
+done
 
 echo "setup complete; env.lock written to ${RMCT_DIR}/env.lock"

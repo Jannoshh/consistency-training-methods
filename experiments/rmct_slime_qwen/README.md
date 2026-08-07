@@ -104,13 +104,12 @@ Phase 3/4 and shown before any paid training step.
   end-to-end via the zero-mask fallback (exact ctm skip semantics; Miles
   cannot digest empty batches).
 
-### LoRA arm status: blocked upstream (see D11)
-Sampling, serving, reward math, and adapter routing all verified; but the
-Megatron-side actor forward under the LoRA config (bshd + GDN) recomputes
-logprobs ~11.8 nats off the sampling engine and produces zero grad_norm —
-training through it would be garbage. Full-param + bshd cannot even run
-(`hf_attention.py` asserts packed_seq_params). Wait for upstream fixes to
-Miles' dense-Qwen3.5 GDN paths before using the LoRA arm.
+### LoRA arm status: UNBLOCKED (2026-08-07, see D11 and upstream_issues.md)
+The uniform-logits failure was root-caused to Miles silently zero-loading the
+language model on bridge-LoRA runs (base torch_dist checkpoint loaded into the
+bridge-built model cannot be name-mapped; the tied embedding zeroes first).
+Fixed by patches P3/P5/P6/P7 in `scripts/apply_patches.py`. Verified healthy
+at 4B (abs_diff 0.013–0.014, nonzero grads) and at 9B/TP2 (below).
 
 ### 9B rollout throughput (1× H200, standalone SGLang, real wrong_argument prompts)
 | config | tok/s (out) | notes |
@@ -155,7 +154,54 @@ SGLang engines:
   rollout_batch × n_train samples per generation (skipped rollouts get
   zero loss masks = exact ctm skip semantics), `--global-batch-size` equals
   that count — works at any DP size, retires the shared-rollout_id hack.
-- New Miles bug (Phase 6 blocker): end-of-run distributed checkpoint save
-  fails at TP2×DP2 ("rank args Namespace mismatch" in save validation);
-  benchmark runs use NOSAVE=1. Needs a fix or workaround before long runs
-  (checkpoint-every-8 is a science requirement).
+- Miles DP>1 checkpoint-save crash ("rank args Namespace mismatch") is fixed
+  by patch P1 in `scripts/apply_patches.py`; saves verified working.
+
+## 9B LoRA baseline (2026-08-07, 2× H200, TP2, science shape)
+
+First full RMCT step of Qwen3.5-9B LoRA (r8/α16, MLP-only targets, bridge
+mode, bshd, micro-batch 1) at the exact paper shape (4 datapoints × 128
+rollouts, max_new_tokens 20480):
+
+| metric | value |
+|---|---|
+| Gate B abs_diff | **0.0141** (healthy; 4B LoRA reference 0.013–0.014) |
+| grad_norm | 0.0125 (nonzero) · pg_clipfrac 0 · ess_ratio 1.0 |
+| kl_policy_base | 0.0005 · parse_rate 0.993 · bias gap 0.20 |
+| step time | **~81 min** = rollout 1182s + ref logprobs 312s + policy logprobs 226s + actor_train 3124s |
+| adapter checkpoint | 45 MB (`iter_*/adapter/` — vs 47 GB full-param dist-ckpt) |
+
+TP1 on the same 2 GPUs OOMs in the first training forward (Triton CUDA OOM);
+TP2 runs with ~90/141 GB used per GPU.
+
+**The LoRA arm is correct but currently ~13× slower per step than full-param**
+(234s on 4× H200): bshd forbids Miles' dynamic batching, so `--micro-batch-size
+1` serializes ~510 × 20k-token sequences through three passes each (ref,
+policy, train). Next lever: micro-batch 2–4 under bshd (padding waste vs
+fewer passes), or an upstream fix for LoRA+thd ("GDN does not support packed
+sequence").
+
+## Phase 6 durability: LoRA kill/resume (2026-08-07, measured)
+
+Hard-killed the 9B run mid-step-2 after the step-1 adapter save, then tested
+resume. Findings, in the order the failure modes were hit:
+
+1. **`--load` does NOT resume adapter checkpoints — silently or loudly.**
+   Adapter saves never write `latest_checkpointed_iteration.txt`, so a
+   `--load` pointed at the run's checkpoint dir starts fresh with zero
+   warning (`start_rollout_id=0`, original rollout records superseded).
+   Writing the tracker by hand only upgrades this to a crash: the generic
+   loader raises "unknown checkpoint format in iter_0000000".
+2. **The working path is `--lora-adapter-path <run>/checkpoints/iter_N/adapter`**
+   (launcher env `LORA_ADAPTER_PATH`), which needs patch **P8**: upstream
+   consumes the flag inside the `load_checkpoint` branch that P5 must skip
+   for bridge-LoRA runs. Verified: "Loaded 128 adapter tensors" per rank +
+   "Restored optimizer state from LoRA checkpoint", training proceeds.
+3. Resuming at a different shape than the save needs
+   `--override-opt-param-scheduler` (saved total-iteration count is
+   asserted against the new run's).
+4. **Open issue**: on the resumed run's second rollout, SGLang died with a
+   CUDA device-side assert during the adapter weight push (fresh-start runs
+   survive the identical update_weights path). LoRA resume therefore
+   restores weights + optimizer correctly but does not yet survive the next
+   sync — root-cause before relying on resume for long runs.

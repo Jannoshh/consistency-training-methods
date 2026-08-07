@@ -152,6 +152,27 @@ def patch_skip_destructive_load() -> str:
     ):
         logger.warning("RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights")
         iteration = 0
+        # RMCT P8: --lora-adapter-path is normally consumed inside
+        # load_checkpoint, which this branch skips — load it directly.
+        # Adapter saves have no latest_checkpointed_iteration.txt and the
+        # generic loader rejects their format anyway ("unknown checkpoint
+        # format"), so this is the ONLY working LoRA resume path.
+        _ap = getattr(args, "lora_adapter_path", None)
+        if _ap:
+            from .lora_utils import load_lora_adapter as _rmct_load_adapter
+            _loaded, _it = _rmct_load_adapter(
+                model, _ap, optimizer=optimizer, opt_param_scheduler=opt_param_scheduler
+            )
+            if _loaded:
+                if _it is None and optimizer is not None:
+                    # no training_state file: refresh fp32 masters from the
+                    # freshly written adapter params, or the first step()
+                    # restores the pre-load init values
+                    optimizer.reload_model_params()
+                iteration = _it if _it is not None else 0
+                logger.warning(f"RMCT P8: resumed LoRA adapter from {_ap} at iteration {iteration}")
+            else:
+                logger.warning(f"RMCT P8: could not load --lora-adapter-path={_ap}; fresh adapter")
     # --load may be unset: setup_model_and_optimizer already asserted pretrained_checkpoint covers it.
     elif load_dir is None or _has_loadable_ckpt(load_dir):"""
     s = s.replace(old, new, 1)

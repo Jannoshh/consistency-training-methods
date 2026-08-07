@@ -1,0 +1,26 @@
++ RMCT_DIR=/workspace/rmct
++ export RMCT_CONFIG=/workspace/rmct/configs/b9lora.json
++ RMCT_CONFIG=/workspace/rmct/configs/b9lora.json
++ RMCT_ARGS=(--rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-megatron-init-path slime_port.miles_init.megatron_init --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --calculate-per-token-loss --kl-coef 0.0 --use-kl-loss --kl-loss-coef 0.0)
++ ROLLOUT_ARGS=(--prompt-data "${PROMPT_DATA:-${RMCT_DIR}/data/run_9b/wrong-argument-pairs-64.jsonl}" --input-key unbiased_messages --apply-chat-template --num-rollout "${NUM_ROLLOUT}" --rollout-batch-size "${ROLLOUT_BATCH:-4}" --n-samples-per-prompt "${N_SAMPLES:-128}" --rollout-max-response-len "${MAX_RESPONSE_LEN:-20480}" --rollout-temperature 1.0 --global-batch-size "$(( ${ROLLOUT_BATCH:-4} * ${N_SAMPLES:-128} ))")
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9lora.json",
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9lora.json",
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 01:47:16.566 actor_cell0_rank0] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 01:47:31.410 actor_cell0_rank0] model.py:965 - RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights
+[36m(MegatronTrainRayActor pid=16521)[0m [2026-08-07 01:47:16.579 actor_cell0_rank1] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+[36m(MegatronTrainRayActor pid=16521)[0m [2026-08-07 01:47:31.445 actor_cell0_rank1] model.py:965 - RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 01:47:43.746 actor_cell0_rank0] timer.py:42 - Timer sleep end (elapsed: 3.7s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 01:47:48.165 actor_cell0_rank0] timer.py:42 - Timer update_weights end (elapsed: 0.9s)
+[36m(RolloutManager pid=15536)[0m [2026-08-07 02:07:15.974 rollout_manager] rmct_rollout.py:389 - RMCT step 1: 510 grad samples, parse_rate=0.993, gap=0.2038, cache_hit=0.84
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 02:07:25.127 actor_cell0_rank0] timer.py:42 - Timer wake_up end (elapsed: 1.7s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 02:07:26.226 actor_cell0_rank0] timer.py:42 - Timer data_preprocess end (elapsed: 1.1s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 02:07:26.226 actor_cell0_rank0] timer.py:42 - Timer train_wait end (elapsed: 1182.5s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 02:12:38.817 actor_cell0_rank0] timer.py:42 - Timer ref_log_probs end (elapsed: 312.4s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 02:16:25.543 actor_cell0_rank0] timer.py:42 - Timer log_probs end (elapsed: 226.3s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:30.399 actor_cell0_rank0] log_utils.py:493 - step 0: {'train/loss': 0.06772881022412107, 'train/pg_loss': 0.06772881022412107, 'train/entropy_loss': 0.0, 'train/pg_clipfrac': 0.0, 'train/ppo_kl': 0.0, 'train/ess_ratio': 0.9999995324577201, 'train/train_rollout_logprob_abs_diff': 0.014098416013510102, 'train/train_rollout_kl': 0.0005058862828800569, 'train/kl_loss': 0.0, 'train/grad_norm': 0.012500402650830028, 'train/lr-pg_0': 1e-05, 'train/step': 0}
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:30.400 actor_cell0_rank0] model.py:854 - step 0: {'train/loss': 0.06772881022412107, 'train/pg_loss': 0.06772881022412107, 'train/entropy_loss': 0.0, 'train/pg_clipfrac': 0.0, 'train/ppo_kl': 0.0, 'train/ess_ratio': 0.9999995324577201, 'train/train_rollout_logprob_abs_diff': 0.014098416013510102, 'train/train_rollout_kl': 0.0005058862828800569, 'train/kl_loss': 0.0, 'train/grad_norm': 0.012500402650830028, 'train/lr-pg_0': 1e-05, 'train/step': 0}
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:30.400 actor_cell0_rank0] timer.py:42 - Timer actor_train end (elapsed: 3124.4s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:30.400 actor_cell0_rank0] timer.py:42 - Timer train end (elapsed: 3664.2s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:31.040 actor_cell0_rank0] timer.py:42 - Timer save_model end (elapsed: 0.2s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:44.806 actor_cell0_rank0] timer.py:42 - Timer sleep end (elapsed: 13.8s)
+[36m(MegatronTrainRayActor pid=16400)[0m [2026-08-07 03:08:49.085 actor_cell0_rank0] timer.py:42 - Timer update_weights end (elapsed: 0.9s)

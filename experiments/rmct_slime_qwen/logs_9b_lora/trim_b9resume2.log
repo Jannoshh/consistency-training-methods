@@ -1,0 +1,19 @@
++ RMCT_DIR=/workspace/rmct
++ export RMCT_CONFIG=/workspace/rmct/configs/b9tiny.json
++ RMCT_CONFIG=/workspace/rmct/configs/b9tiny.json
++ RMCT_ARGS=(--rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-megatron-init-path slime_port.miles_init.megatron_init --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --calculate-per-token-loss --kl-coef 0.0 --use-kl-loss --kl-loss-coef 0.0)
++ ROLLOUT_ARGS=(--prompt-data "${PROMPT_DATA:-${RMCT_DIR}/data/run_9b/wrong-argument-pairs-64.jsonl}" --input-key unbiased_messages --apply-chat-template --num-rollout "${NUM_ROLLOUT}" --rollout-batch-size "${ROLLOUT_BATCH:-4}" --n-samples-per-prompt "${N_SAMPLES:-128}" --rollout-max-response-len "${MAX_RESPONSE_LEN:-20480}" --rollout-temperature 1.0 --global-batch-size "$(( ${ROLLOUT_BATCH:-4} * ${N_SAMPLES:-128} ))")
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9tiny.json",
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9tiny.json",
+[36m(MegatronTrainRayActor pid=64835)[0m [2026-08-07 04:34:27.578 actor_cell0_rank0] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+ray.exceptions.RayTaskError(NotImplementedError): [36mray::MegatronTrainRayActor.init()[39m (pid=64960, ip=172.23.0.2, actor_id=21d42c7031dbb06594b5c16002000000, repr=<miles.backends.megatron_utils.actor.MegatronTrainRayActor object at 0x73324c692690>)
+    raise NotImplementedError(f"unknown checkpoint format in {checkpoint_name}")
+NotImplementedError: unknown checkpoint format in /root/runs/b9lora/checkpoints/iter_0000000
+[36m(MegatronTrainRayActor pid=64835)[0m     raise NotImplementedError(f"unknown checkpoint format in {checkpoint_name}")
+[36m(MegatronTrainRayActor pid=64835)[0m NotImplementedError: unknown checkpoint format in /root/runs/b9lora/checkpoints/iter_0000000
+[36m(MegatronTrainRayActor pid=64960)[0m [2026-08-07 04:34:27.543 actor_cell0_rank1] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+[36m(MegatronTrainRayActor pid=64960)[0m     raise NotImplementedError(f"unknown checkpoint format in {checkpoint_name}")
+[36m(MegatronTrainRayActor pid=64960)[0m NotImplementedError: unknown checkpoint format in /root/runs/b9lora/checkpoints/iter_0000000
+[36m(MegatronTrainRayActor pid=64960)[0m     raise NotImplementedError(f"unknown checkpoint format in {checkpoint_name}")
+[36m(MegatronTrainRayActor pid=64960)[0m NotImplementedError: unknown checkpoint format in /root/runs/b9lora/checkpoints/iter_0000000
+RUN_EXIT=1

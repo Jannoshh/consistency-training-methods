@@ -1,0 +1,26 @@
++ RMCT_DIR=/workspace/rmct
++ export RMCT_CONFIG=/workspace/rmct/configs/b9lora.json
++ RMCT_CONFIG=/workspace/rmct/configs/b9lora.json
++ RMCT_ARGS=(--rollout-function-path slime_port.rmct_rollout.generate_rollout --custom-megatron-init-path slime_port.miles_init.megatron_init --advantage-estimator grpo --disable-rewards-normalization --loss-type policy_loss --eps-clip 0.2 --calculate-per-token-loss --kl-coef 0.0 --use-kl-loss --kl-loss-coef 0.0)
++ ROLLOUT_ARGS=(--prompt-data "${PROMPT_DATA:-${RMCT_DIR}/data/run_9b/wrong-argument-pairs-64.jsonl}" --input-key unbiased_messages --apply-chat-template --num-rollout "${NUM_ROLLOUT}" --rollout-batch-size "${ROLLOUT_BATCH:-4}" --n-samples-per-prompt "${N_SAMPLES:-128}" --rollout-max-response-len "${MAX_RESPONSE_LEN:-20480}" --rollout-temperature 1.0 --global-batch-size "$(( ${ROLLOUT_BATCH:-4} * ${N_SAMPLES:-128} ))")
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9lora.json",
+    "RMCT_CONFIG": "/workspace/rmct/configs/b9lora.json",
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:17:51.134 actor_cell0_rank0] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:18:04.779 actor_cell0_rank0] model.py:965 - RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights
+[36m(MegatronTrainRayActor pid=5384)[0m [2026-08-07 01:17:51.134 actor_cell0_rank1] miles_init.py:32 - RMCT: replaced compute_advantages_and_returns with slime_port.rmct_advantage.compute_advantages
+[36m(MegatronTrainRayActor pid=5384)[0m [2026-08-07 01:18:04.967 actor_cell0_rank1] model.py:965 - RMCT P5: skipping fallback load; bridge LoRA model already carries HF weights
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:18:30.993 actor_cell0_rank0] timer.py:42 - Timer sleep end (elapsed: 8.3s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:18:34.114 actor_cell0_rank0] timer.py:42 - Timer update_weights end (elapsed: 0.3s)
+[36m(RolloutManager pid=3898)[0m [2026-08-07 01:35:24.250 rollout_manager] rmct_rollout.py:389 - RMCT step 1: 511 grad samples, parse_rate=0.993, gap=0.2644, cache_hit=0.84
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:35:35.063 actor_cell0_rank0] timer.py:42 - Timer wake_up end (elapsed: 2.9s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:35:35.614 actor_cell0_rank0] timer.py:42 - Timer data_preprocess end (elapsed: 0.6s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:35:35.614 actor_cell0_rank0] timer.py:42 - Timer train_wait end (elapsed: 1024.6s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:40:03.631 actor_cell0_rank0] timer.py:42 - Timer ref_log_probs end (elapsed: 267.7s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:43:14.351 actor_cell0_rank0] timer.py:42 - Timer log_probs end (elapsed: 189.9s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:43:58.798 actor_cell0_rank0] timer.py:42 - Timer actor_train end (elapsed: 41.5s)
+[36m(MegatronTrainRayActor pid=5258)[0m [2026-08-07 01:43:58.799 actor_cell0_rank0] timer.py:42 - Timer train end (elapsed: 503.2s)
+[36m(MegatronTrainRayActor pid=5258)[0m RuntimeError: Triton Error [CUDA]: out of memory
+[36m(MegatronTrainRayActor pid=5258)[0m RuntimeError: Triton Error [CUDA]: out of memory
+RuntimeError: Triton Error [CUDA]: out of memory
+RuntimeError: Triton Error [CUDA]: out of memory
+RUN_EXIT=1
