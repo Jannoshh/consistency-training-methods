@@ -77,6 +77,25 @@ the stack was vLLM 0.18.1 + torch 2.10/cu128 exactly as in the notes.
 Log: RunPod volume `/workspace/verl_cache/rmct_lora_science_measure.log`
 (volume is per-pod — copy off before terminating).
 
+### Remaining-lever probe (2026-08-07, 2B reduced shape, 3 arms × 3 steps)
+
+Per-token update_actor time (warm steps; raw seconds are confounded by
+temp-1.0 length variance between arms):
+
+| arm | update_actor ms/token (warm) | verdict |
+|---|---:|---|
+| baseline (grad ckpt ON, ceiling 24,576) | 0.061 | reference |
+| **grad ckpt OFF** | **0.046** | **~25% faster per token** — at 9B science shape update_actor is 38% of the step → ~9–10% step saving. Must re-verify memory at 9B/20,480 (78/141 GB used with ckpt ON; activations grow substantially without it). |
+| packing ceiling 3× (73,728) | 0.089–0.200 | inconclusive — warm steps collapsed to 110–150k tokens, so fixed per-step costs dominate the per-token metric. Re-test at 9B where the 40,960 ceiling packs only 2×20k sequences. |
+
+DP over 2–4 GPUs was not measurable this session (tooling provisions single-
+GPU pods); it is verl's stock FSDP data parallelism — expect near-linear on
+every phase, verify with one 2-GPU step when multi-GPU rental is available.
+
+Priority for the next optimization session: (1) one 9B science-shape step
+with grad ckpt OFF (expected ~33 min/step if memory holds), (2) 2-GPU DP
+scaling check, (3) ceiling re-test at 9B.
+
 ```
 Pinned verl:  2b0fe51   ("[rocm] feat: enable DeepSeek-V4-Flash GRPO on AMD GPUs (#7050)")
 Math source:  experiments/rmct_slime_qwen/slime_port/{pipeline,rewards,advantages,rmct_advantage}.py
