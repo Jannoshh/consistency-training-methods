@@ -37,6 +37,26 @@ from verl.utils.device import auto_set_device
 class RMCTTaskRunner(BaseTaskRunner):
     """TaskRunner that builds a ``RayRMCTTrainer``."""
 
+    def add_actor_rollout_worker(self, config):
+        # BaseTaskRunner picks the fused ActorRolloutRef role only when
+        # need_reference_policy(config) is true, which reads verl's two KL
+        # switches — both off for RMCT (the trainer owns the KL term). Without
+        # LoRA (ref_in_actor) that would register the worker under
+        # Role.ActorRollout while init_workers, seeing our forced
+        # use_reference_policy, asserts on Role.ActorRolloutRef. Re-key it.
+        cls, wg_cls = super().add_actor_rollout_worker(config)
+        from verl.trainer.ppo.ray_trainer import Role
+
+        if Role.ActorRollout in self.role_worker_mapping:
+            lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
+            if lora_rank <= 0:
+                lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
+            ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
+            if not ref_in_actor:
+                self.role_worker_mapping[Role.ActorRolloutRef] = self.role_worker_mapping.pop(Role.ActorRollout)
+                self.mapping[Role.ActorRolloutRef] = self.mapping.pop(Role.ActorRollout)
+        return cls, wg_cls
+
     def run(self, config):
         from pprint import pprint
 
