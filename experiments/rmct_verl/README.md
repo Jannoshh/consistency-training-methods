@@ -6,9 +6,38 @@ verl itself is not forked or patched. This is the port sketched in
 pinned verl and reusing the Gate-A-tested math from the slime/Miles port
 verbatim.
 
-**Status: written and unit-tested on CPU only. Never executed on a GPU.** The
-verl LoRA smoke test passed (commit `1e78f8c`), which clears the stack; it does
-not exercise a single line of this recipe, and see the `use_v1` caveat below.
+**Status: EXECUTED END-TO-END ON GPU (2026-08-07, 1× H200, Qwen3.5-2B tiny
+shape).** One full RMCT step on the real wrong-argument pairs ran to exit 0
+through the v0 trainer: agent-loop rollouts (16 rows × n=8 = 128 samples,
+correct count in the rollout dump), ref + policy logprobs, the RMCT
+`_update_actor` override, and the GDN backward. `rollout_probs_diff_mean`
+0.0047, sampling↔training pearson 0.9997, 134s/step at tiny shape. The verl
+LoRA smoke test also passed separately (commit `1e78f8c`).
+
+GPU bring-up fixes/environment additions beyond `verl_smoke_notes.md` (all
+hit in sequence on a fresh pod):
+- `pip install cachetools tilelang` — cachetools for verl's llm_server;
+  **tilelang is required on Hopper**: fla's `chunk_bwd_dqkwg` hard-errors on
+  Triton 3.4–3.7.0 (fla#640) and tilelang is the sanctioned fallback.
+- vLLM must be installed WITH its dependency closure (a `--no-deps` install
+  misses pybase64 etc.), and transformers must be re-pinned `>=5.5.3,<5.11`
+  AFTERWARD (vLLM 0.18.1's resolver downgrades it below qwen3_5 support).
+- Without flash-attn, verl's FSDP worker fails twice: transformers defaults
+  to flash_attention_2 (`+actor_rollout_ref.model.override_config.attn_implementation=sdpa`
+  works around it) but `verl/utils/attention_utils.py` imports
+  `flash_attn.bert_padding` unconditionally — flash-attn is REQUIRED, build
+  it (MAX_JOBS≤8) or reuse the cached wheel.
+- `actor_rollout_ref.rollout.agent.agent_loop_config_path` must be ABSOLUTE
+  (relative paths resolve against the verl clone, not this recipe).
+- The non-LoRA role-mapping fix in `main_rmct.py` (commit `90a4a82`).
+
+Known gap: the rollout dump (`trainer.rollout_data_dir`) contains verl's
+standard fields only — the per-sample `variant`/`p_ref`/`p_hat`/`parse_ok`
+extras are not yet threaded into `reward_extra_infos_dict`. Fix before
+using dumps for Gate A replay.
+
+Next: LoRA-arm bring-up at 9B science shape (the smoke's LoRA block +
+this recipe), then step-time comparison vs Miles' 81 min baseline.
 
 ```
 Pinned verl:  2b0fe51   ("[rocm] feat: enable DeepSeek-V4-Flash GRPO on AMD GPUs (#7050)")
@@ -121,14 +150,55 @@ front.
 
 ### 2. Train
 
-The LoRA/FSDP/vLLM block is the one validated by the smoke script
-(`scratchpad/verl_smoke/run_smoke.sh`) — same regex, same `lora.merge=True`
-full-weight sync, same `save_lora_only` checkpointing.
+Reuse the smoke script's verified override arrays verbatim — `MODEL`, `ACTOR`,
+`REF`, `ROLLOUT` in `experiments/rmct_slime_qwen/scripts/verl_run_smoke.sh`
+(lines 192-256), whose every nonobvious entry is sourced in
+`verl_smoke_notes.md`. They cover the LoRA regex, `lora.merge=True` full-weight
+sync, `save_lora_only`, FSDP2, and the vLLM settings — do not re-derive them.
+
+The script cannot simply be sourced: it dispatches on `$1` at the bottom and
+would launch the smoke run. Extract the arrays together with the
+user-adjustable block they interpolate, and source that instead.
+
+Hydra also **rejects a key passed twice** ("Multiple values for ..."), so the
+RMCT deltas cannot simply be appended after the arrays. Three keys collide:
+`ppo_mini_batch_size` and `rollout.n` come from shell variables (set them by
+export) and `use_kl_loss=True` is hardcoded (filter it out). This block does
+all of it and is tested against the script at `1e78f8c`:
 
 ```bash
-LORA_TARGET_MODULES='.*language_model\.layers\.[0-9]+\.(self_attn\.[qkvo]_proj|mlp\.(gate|up|down)_proj)'
+SMOKE="${CTM_DIR}/experiments/rmct_slime_qwen/scripts/verl_run_smoke.sh"
+sed -n '24,61p;192,256p' "${SMOKE}" > /tmp/verl_blocks.sh   # defaults + MODEL/ACTOR/REF/ROLLOUT
 
+export MODEL_PATH=/workspace/models/Qwen3.5-9B
+export PPO_MINI_BATCH_SIZE=8      # ACTOR interpolates this
+export ROLLOUT_N=128              # ROLLOUT interpolates this
+source /tmp/verl_blocks.sh
+
+# drop the smoke run's verl-native KL settings; RMCT owns the KL term
+KEEP=(); for o in "${ACTOR[@]}"; do [[ "$o" == *kl_loss* ]] || KEEP+=("$o"); done
+ACTOR=("${KEEP[@]}")
+```
+
+Re-check those line numbers against the script before trusting them.
+
+**RMCT changes exactly these overrides on top of the smoke block:**
+
+| Override | Why it differs from the smoke run |
+| --- | --- |
+| `actor_rollout_ref.actor.use_kl_loss=False` (smoke: `True`, `kl_loss_coef=0.001`) | RMCT owns the KL term; `RayRMCTTrainer.__init__` refuses to start if either verl KL path is on. Applied by filtering the `ACTOR` array above. |
+| `algorithm.use_kl_in_reward=False` | Same reason. The reference forward still runs because the trainer forces `use_reference_policy=True`. |
+| `ROLLOUT_N=128` (smoke: 4) | One rollout population per (datapoint, variant) row. Set by export, since `ROLLOUT` interpolates it. |
+| `PPO_MINI_BATCH_SIZE=8` (smoke: 8) | Prompts per optimizer step; exported for the same reason. |
+| `actor_rollout_ref.rollout.temperature=1.0 top_p=1.0 top_k=-1` | Rate-affecting sampling, pinned from `configs/run_9b.json`. |
+| `data.train_batch_size=8` (smoke: 32) | 2 rows × 4 datapoints per step. |
+| `data.max_response_length=20480` (smoke: 1024) | `max_new_tokens` from `configs/run_9b.json`. |
+| `data.max_prompt_length=4096` (smoke: 512) | The wrong-argument prompts are long; `filter_overlong_prompts=True` will tell you if this is short. |
+| `data.shuffle=False` | Row order is the frozen artifact's order. |
+
+```bash
 python3 -m recipe.rmct.main_rmct \
+    "${MODEL[@]}" "${ACTOR[@]}" "${REF[@]}" "${ROLLOUT[@]}" \
     data.train_files=/workspace/rmct/data/run_9b/rmct_pairs.parquet \
     data.val_files=/workspace/rmct/data/run_9b/rmct_pairs.parquet \
     data.train_batch_size=8 \
@@ -143,40 +213,10 @@ python3 -m recipe.rmct.main_rmct \
     rmct.normalization=per_item \
     rmct.anchor_weight=0.0 \
     \
-    actor_rollout_ref.model.path=/workspace/models/Qwen3.5-9B \
-    actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.model.lora_rank=32 \
-    actor_rollout_ref.model.lora_alpha=64 \
-    actor_rollout_ref.model.target_modules="'${LORA_TARGET_MODULES}'" \
-    ++actor_rollout_ref.model.lora.merge=True \
-    \
-    actor_rollout_ref.actor.strategy=fsdp2 \
-    actor_rollout_ref.actor.optim.lr=1.0e-05 \
-    actor_rollout_ref.actor.ppo_mini_batch_size=8 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.actor.use_dynamic_bsz=False \
     actor_rollout_ref.actor.use_kl_loss=False \
-    actor_rollout_ref.actor.entropy_coeff=0 \
-    actor_rollout_ref.actor.use_torch_compile=False \
-    actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
-    actor_rollout_ref.actor.fsdp_config.ulysses_sequence_parallel_size=1 \
-    ++actor_rollout_ref.actor.checkpoint.save_lora_only=True \
-    \
-    actor_rollout_ref.ref.strategy=fsdp2 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.ref.log_prob_use_dynamic_bsz=False \
-    actor_rollout_ref.ref.use_torch_compile=False \
-    \
-    actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.n=128 \
     actor_rollout_ref.rollout.temperature=1.0 \
     actor_rollout_ref.rollout.top_p=1.0 \
     actor_rollout_ref.rollout.top_k=-1 \
-    actor_rollout_ref.rollout.load_format=safetensors \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=False \
     \
     algorithm.use_kl_in_reward=False \
     \
@@ -192,6 +232,26 @@ python3 -m recipe.rmct.main_rmct \
 `trainer.use_v1=False`, `actor_rollout_ref.rollout.agent.agent_loop_config_path`
 and the `rmct.*` defaults are pinned in `config/rmct_trainer.yaml`; the
 overrides above only cover what is run-specific.
+
+### `trainer.use_v1` — read this before launching
+
+verl's default is `use_v1: true`, which routes to `TaskRunnerV1` and the
+TransferQueue trainer in `verl/trainer/ppo/v1/`. This recipe subclasses the V0
+`RayPPOTrainer`, so **the launch must run with `trainer.use_v1=False`.** It is
+pinned in `config/rmct_trainer.yaml` and `main_rmct.main` raises if it is ever
+overridden back to true, so this cannot fail silently — but it does mean the
+smoke run and the RMCT run exercise different trainers:
+`verl_run_smoke.sh` launches `python3 -m verl.trainer.main_ppo` with no
+`use_v1` override (line 278), so the passing smoke test validated the **V1**
+path. Expect V0-only surprises (LoRA weight sync, checkpointing, metrics keys)
+not to be covered by it; watch the same signals `verl_smoke_notes.md` §7 lists.
+
+**Future work: port to the V1 TransferQueue trainer.** V0 carries
+`@deprecated("will be removed in v0.9.0")`. The V1 equivalent is
+`PPOTrainer._update_actor(batch: KVBatchMeta, metrics)` in
+`verl/trainer/ppo/v1/trainer_base.py:1672` — a different data model, so the
+port is a real piece of work. `rmct_core.py` is deliberately free of verl
+imports and carries over unchanged; only `rmct_trainer.py` needs rewriting.
 
 ## Deviations from the Miles/slime port
 
