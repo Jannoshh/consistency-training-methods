@@ -92,9 +92,30 @@ DP over 2–4 GPUs was not measurable this session (tooling provisions single-
 GPU pods); it is verl's stock FSDP data parallelism — expect near-linear on
 every phase, verify with one 2-GPU step when multi-GPU rental is available.
 
-Priority for the next optimization session: (1) one 9B science-shape step
-with grad ckpt OFF (expected ~33 min/step if memory holds), (2) 2-GPU DP
-scaling check, (3) ceiling re-test at 9B.
+**9B verification (2026-08-08): both config levers are dead.**
+- grad ckpt OFF at science shape: **CUDA OOM** in the first training pass
+  (~1 GB over) — the 2B result does not transfer to 20,480-token packed
+  micro-batches at 9B on one GPU. Only viable with DP sharding or a lower
+  ceiling, which eat the gain.
+- 3× packing ceiling (73,728, ckpt ON): cold step 2,543s vs baseline
+  2,537s — **no effect** (GPU already saturated per micro-batch at 20k
+  sequences). Warm step not captured (session ended early by user request).
+
+Remaining lever: DP over 2–4 GPUs + async overlap (engineering, not config).
+
+## Decision 2026-08-08: moving off Qwen3.5
+
+All LoRA pathologies of this migration (Megatron bshd forcing, SGLang LoRA
+pool shape bugs, vLLM packed-group regression, the silent adapter-mapping
+failure in the predecessor runs) are specific to Qwen3.5's hybrid
+GatedDeltaNet architecture. LoRA is also fundamentally not a FLOPs saver at
+9B-on-H200 scale (it skips only weight-grads + optimizer, ~55s of the 234s
+full-param step) — its wins are memory and small checkpoints. On a vanilla
+dense model (e.g. Qwen3-8B) the existing Miles LoRA path should run packed
+at the full-param cost profile (~$120/100 steps) with no patches. The user
+has decided to move off Qwen3.5; model selection for the successor runs is
+an open science decision (comparability with the Qwen3.5-9B results lineage
+breaks either way).
 
 ```
 Pinned verl:  2b0fe51   ("[rocm] feat: enable DeepSeek-V4-Flash GRPO on AMD GPUs (#7050)")
