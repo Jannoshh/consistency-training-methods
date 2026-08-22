@@ -56,7 +56,7 @@ grounding: `notes/elicitation_scheme.md`.
 | Path | What it is |
 | --- | --- |
 | `recipe/vdct/vdct_core.py` | Pure math: JS/log-score/entropy/TV, reward + per-group advantage assembly, trainability flags, verl-batch adapters. No Ray, no verl. Bootstraps and reuses `recipe.rmct.rmct_core` (KL term) and `slime_port` (standardization). |
-| `recipe/vdct/vdct_schema.py` | Zero-dependency leaf module owning the row vocabulary (variant/kind strings) and the shared JSONL reader — importable without the rmct/slime bootstrap. |
+| `recipe/vdct/vdct_schema.py` | Light leaf module owning the shared contracts: row vocabulary, the `vdct.paired_prompts` artifact schema + row validator + publish helper, `VDCTConfig` (defaults + `from_mapping`), the launch invariants (`vdct_config_problems`, enforced identically by `main_vdct`, the trainer, and the preflight), batch arithmetic, and the JSONL reader — importable without the rmct/slime bootstrap. |
 | `recipe/vdct/vdct_elicitation.py` | Elicitation instruction text + strict distribution parser (single source of truth for the surface format). |
 | `recipe/vdct/vdct_agent_loop.py` | `@register("vdct")` loop; dispatches on the row's `kind` (see deviation V1). |
 | `recipe/vdct/vdct_trainer.py` | `RayVDCTTrainer(RayPPOTrainer)`: advantage/KL/masking stage + a generic `_log_rollout_data` override that dumps every per-row non-tensor column (loop fields and computed rewards/advantages/targets alike). |
@@ -65,9 +65,9 @@ grounding: `notes/elicitation_scheme.md`.
 | `scripts/make_pairs_from_attct.py` | c-wei/AttCT `sycophancy_bct` assets → native paired-prompt JSONL, published as a verified `ctm.artifacts` JSONL/manifest pair (see Data). |
 | `scripts/make_pairs_from_medicalchat.py` | MedicalChat sycophancy environment (ariahw/rl-rewardhacking-ext) → native paired-prompt JSONL, recast as a two-option stance choice with no ground-truth in the training path (see Data). |
 | `scripts/make_vdct_dataset.py` | Paired-prompt JSONL → verl parquet, 4 rows/datapoint. |
-| `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations (side aggregation shared with the training-time metric via `vdct_core.mean_side_distributions`). |
+| `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations (the cue-invariance quantity — TV over mean parsed stated distributions per side — is the same definition as the training-time `vdct/tv_cue_mean`, whose reward target now reads the identical aggregation). |
 | `scripts/resolve_config.py` | Preflight: dry-resolves the overlay against a verl checkout, checks every key the recipe reads, prints the run plan. Run it before submitting any pod job. |
-| `tests/` | 80 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
+| `tests/` | 82 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
 | `notes/elicitation_scheme.md` | Phase 0 note fixing the elicitation format. |
 
 Run tests: `uv run --no-sync python -m pytest experiments/vdct_verl/tests -q`
@@ -112,9 +112,11 @@ Mitigating Reward Hacking During RL*, OpenReview `uFTnN6fUgW`, released at
 whose sycophancy loophole appends a leading question — half implying the
 correct management, half a plausible incorrect one. The converter recasts
 the free-form environment as a TWO-OPTION stance choice using the release's
-own per-row stance phrases (`correct_phrase`/`incorrect_phrase`), so the
-existing MCQ machinery (answer parser, verbalized distributions, trait
-classifier) consumes it unchanged — and **no ground-truth signal enters the
+own per-row stance phrases (`correct_phrase`/`incorrect_phrase`) and the
+pinned mcq-bias prompt surface (`instruction_suffix`, `--prompt-style
+none|encourage_cot` matching the materializer), so the existing MCQ
+machinery (answer parser, verbalized distributions, trait classifier)
+consumes it unchanged — and **no ground-truth signal enters the
 training path**: `ground_truth` is left empty by design (consistency
 training is applied precisely where no correctness signal is assumed);
 which stance is medically right stays in the source repo. Cue choice and
@@ -133,7 +135,7 @@ uv run --no-sync python experiments/vdct_verl/scripts/make_pairs_from_medicalcha
 Verified on the real assets (2026-08-22): all 2,377 train pairs convert (0
 skipped; seeded cue split 1,176 incorrect / 1,201 correct-stance), the
 hard-1k `--ids-from` subset builds exactly 1,000 pairs, and prompt tokens
-under the Qwen3-8B chat template run p50=257, p99=644, max=1,036 — inside
+under the Qwen3-8B chat template run p50=237, p99=623, max=1,016 — inside
 the ceiling. Evaluation for this pool runs through the release's own judged
 environment (`run_eval.py`, Qwen3-235B medical-consistency judge), which is
 where correctness lives.

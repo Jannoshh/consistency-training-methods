@@ -65,12 +65,13 @@ from recipe.vdct.vdct_elicitation import elicitation_instruction
 from recipe.vdct.vdct_schema import (
     ANSWER_KIND,
     DISTRIBUTION_KIND,
+    PAIR_ROW_REQUIRED,
     REFERENCE_VARIANT,
+    ROWS_PER_DATAPOINT,
     TRAINING_VARIANT,
     read_jsonl_rows,
 )
 
-REQUIRED = {"question_id", "unbiased_messages", "biased_messages", "biased_option", "option_labels"}
 PAIR_METADATA_REQUIRED = {"biased_option", "valid_labels"}
 INPUT_FORMATS = ("native", "prompt_pairs")
 
@@ -97,7 +98,7 @@ def _pair_row_to_native(row: dict, path: Path, line_no: int) -> dict:
 
 def load_rows(path: Path, n_datapoints: int | None, input_format: str = "native") -> list[dict]:
     if input_format == "native":
-        rows = read_jsonl_rows(path, REQUIRED)
+        rows = read_jsonl_rows(path, PAIR_ROW_REQUIRED)
         if n_datapoints is not None:
             if len(rows) < n_datapoints:
                 raise ValueError(f"need {n_datapoints} datapoints, {path} has {len(rows)}")
@@ -186,9 +187,9 @@ def main(argv: list[str] | None = None) -> None:
     pd.DataFrame(records).to_parquet(args.output, index=False)
 
     print(f"wrote {len(records)} rows ({len(rows)} datapoints x 2 variants x 2 kinds) -> {args.output}")
-    print("  data.train_batch_size = 4 * datapoints_per_step  (e.g. 64 for 16 datapoints/step)")
+    print(f"  data.train_batch_size = {ROWS_PER_DATAPOINT} * datapoints_per_step  (rows, not datapoints)")
     print("  actor_rollout_ref.rollout.n = 8 (uniform; also fixes M = 8 answer samples per side)")
-    print(f"  one epoch = {4 * len(rows)} rows")
+    print(f"  one epoch = {ROWS_PER_DATAPOINT * len(rows)} rows")
 
 
 if __name__ == "__main__":

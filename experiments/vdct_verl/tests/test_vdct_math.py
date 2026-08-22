@@ -27,13 +27,11 @@ from recipe.vdct.vdct_core import (
     js_divergence,
     log_score,
     mean_distribution,
+    mean_side_distributions,
     merge_dump_fields,
     rows_from_records,
     total_variation,
     worst_case_reward,
-)
-from recipe.vdct.vdct_core import (
-    mean_side_distributions as compute_side_means,
 )
 from slime_port.advantages import normalize_advantages, normalize_grouped
 
@@ -408,7 +406,7 @@ def test_mean_side_distributions_and_record_round_trip():
         dist_row(TRAINING_VARIANT, (0.2, 0.8)),
         answer_row(TRAINING_VARIANT, 1),
     ]
-    means = compute_side_means(rows)
+    means = mean_side_distributions(rows)
     assert means["g0"][REFERENCE_VARIANT] == pytest.approx([0.5, 0.5], abs=APPROX)
     assert means["g0"][TRAINING_VARIANT] == pytest.approx([0.2, 0.8], abs=APPROX)
 
@@ -425,6 +423,37 @@ def test_mean_side_distributions_and_record_round_trip():
         for row in rows
     ]
     assert rows_from_records(records) == rows
+
+
+def test_vdct_config_from_mapping_uses_dataclass_defaults():
+    config = VDCTConfig.from_mapping({"lambda_log_score": "0.3", "epsilon": 0.01})
+    assert config == VDCTConfig(lambda_log_score=0.3, epsilon=0.01)
+    assert VDCTConfig.from_mapping({}) == VDCTConfig()
+
+
+def test_vdct_config_problems():
+    from types import SimpleNamespace
+
+    from recipe.vdct.vdct_schema import vdct_config_problems
+
+    def config(**overrides):
+        base = {
+            "trainer": {"use_v1": False},
+            "algorithm": {"use_kl_in_reward": False},
+            "actor_rollout_ref": SimpleNamespace(actor=SimpleNamespace(use_kl_loss=False)),
+            "vdct": {"kl_logprob_source": "old_log_probs"},
+            "data": SimpleNamespace(train_batch_size=64),
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    assert vdct_config_problems(config()) == []
+    assert any("use_v1" in p for p in vdct_config_problems(config(trainer={"use_v1": True})))
+    assert any("KL" in p for p in vdct_config_problems(config(algorithm={"use_kl_in_reward": True})))
+    assert any("kl_logprob_source" in p for p in vdct_config_problems(config(vdct={"kl_logprob_source": "typo"})))
+    assert any(
+        "datapoints_per_step" in p for p in vdct_config_problems(config(data=SimpleNamespace(train_batch_size=66)))
+    )
 
 
 def test_merge_dump_fields():

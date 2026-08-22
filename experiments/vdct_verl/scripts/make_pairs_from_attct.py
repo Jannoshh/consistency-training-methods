@@ -37,22 +37,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import os
 import random
 import sys
 from pathlib import Path
 
-from ctm.artifacts import artifact_manifest_path, plain_file_identity, write_verified_jsonl_artifact
+from ctm.artifacts import plain_file_identity
 
 _RECIPE_ROOT = Path(__file__).resolve().parents[1]
 if str(_RECIPE_ROOT) not in sys.path:
     sys.path.insert(0, str(_RECIPE_ROOT))
 
-from recipe.vdct.vdct_schema import git_head_sha, read_jsonl_rows
+from recipe.vdct.vdct_schema import git_head_sha, load_module_from_path, publish_pair_artifact, read_jsonl_rows
 
-PAIR_ARTIFACT_SCHEMA = "vdct.paired_prompts"
-PAIR_ARTIFACT_SCHEMA_VERSION = 1
 STYLES = ("cot", "non_cot")
 SPLITS = ("train", "eval")
 
@@ -60,13 +57,10 @@ SPLITS = ("train", "eval")
 def load_wrappers_module(attct_dir: Path):
     """Load ``data/wrappers.py`` from the checkout by file path (the repo is
     an unpackaged monorepo whose top-level ``data`` name would collide)."""
-    wrappers_path = attct_dir / "data" / "wrappers.py"
-    if not wrappers_path.exists():
-        raise SystemExit(f"{wrappers_path} not found; pass --attct-dir or set ATTCT_DIR to a c-wei/AttCT checkout")
-    spec = importlib.util.spec_from_file_location("_attct_wrappers", wrappers_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    try:
+        return load_module_from_path("_attct_wrappers", attct_dir / "data" / "wrappers.py")
+    except FileNotFoundError as exc:
+        raise SystemExit(f"{exc} not found; pass --attct-dir or set ATTCT_DIR to a c-wei/AttCT checkout") from exc
 
 
 def read_clean_prompts(path: Path) -> list[str]:
@@ -109,7 +103,7 @@ def wrap_prompt(wrappers, clean: str, question_id: str, seed: int) -> tuple[str,
 
 def build_pairs(wrappers, prompts: list[str], seed: int, source_tag: str) -> tuple[list[dict], dict[str, int]]:
     pairs: list[dict] = []
-    counts = {"n_prompts": len(prompts), "n_no_choices": 0, "n_duplicates": 0}
+    counts = {"n_source_rows": len(prompts), "n_no_choices": 0, "n_duplicates": 0}
     seen: set[str] = set()
     for clean in prompts:
         question_id = hashlib.sha1(clean.encode("utf-8")).hexdigest()
@@ -155,9 +149,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.attct_dir is None:
         raise SystemExit("pass --attct-dir or set ATTCT_DIR to a c-wei/AttCT checkout")
-    manifest_path = artifact_manifest_path(args.output)
-    if (args.output.exists() or manifest_path.exists()) and not args.force:
-        raise SystemExit(f"{args.output} exists; pass --force to overwrite")
 
     wrappers = load_wrappers_module(args.attct_dir)
     control_path = args.attct_dir / "datasets" / "sycophancy_bct" / f"control_{args.style}_{args.split}.jsonl"
@@ -172,14 +163,9 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"need {args.n_datapoints} pairs, built {len(pairs)}")
         pairs = pairs[: args.n_datapoints]
 
-    if args.force:
-        args.output.unlink(missing_ok=True)
-        manifest_path.unlink(missing_ok=True)
-    write_verified_jsonl_artifact(
+    publish_pair_artifact(
         args.output,
         pairs,
-        artifact_schema=PAIR_ARTIFACT_SCHEMA,
-        schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
         provenance={
             "attct_dir": str(args.attct_dir),
             "attct_sha": git_head_sha(args.attct_dir),
@@ -189,11 +175,8 @@ def main(argv: list[str] | None = None) -> None:
             "seed": args.seed,
             **counts,
         },
-        nonempty=True,
+        force=args.force,
     )
-
-    print(f"wrote {len(pairs)} pairs -> {args.output}")
-    print(f"  manifest -> {manifest_path}")
     print(f"  skipped: {counts['n_no_choices']} without answer choices, {counts['n_duplicates']} duplicates")
 
 

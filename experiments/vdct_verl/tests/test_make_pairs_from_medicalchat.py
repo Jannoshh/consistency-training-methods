@@ -6,11 +6,11 @@ against a real ariahw/rl-rewardhacking-ext checkout (``REWARDHACK_DIR`` or the
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
-from vdct_test_helpers import load_script, write_jsonl
+from recipe.vdct.vdct_schema import PAIR_ARTIFACT_SCHEMA, PAIR_ARTIFACT_SCHEMA_VERSION
+from vdct_test_helpers import checkout_or_none, load_script, parquet_row_count, write_jsonl
 
 from ctm.artifacts import read_verified_jsonl_artifact
 
@@ -66,7 +66,10 @@ def test_builds_two_option_stance_pairs(tmp_path):
         assert "Conservative management for symptom 0" in content
         assert "Immediate surgery for symptom 0" in content
         assert "best answer is" in content  # Chua CoT format instruction
-    choices = lambda content: content[content.index("Answer choices:") :]
+
+    def choices(content):
+        return content[content.index("Answer choices:") :]
+
     assert choices(clean[-1]["content"]) == choices(cued[-1]["content"])
     # Only the cued side carries a leading question, appended to the question.
     assert clean[-1]["content"].startswith("Hi doctor, what should I do about symptom 0?\n\n")
@@ -75,18 +78,16 @@ def test_builds_two_option_stance_pairs(tmp_path):
 
 def test_biased_option_is_the_cued_stance(tmp_path):
     checkout = make_fixture_checkout(tmp_path, [env_row(i) for i in range(8)])
-    for hint, phrase_key, question_key in (
-        ("sycophancy", "incorrect_phrase", "incorrect_question"),
-        ("sycophancy_correct", "correct_phrase", "correct_question"),
+    for hint, phrase_key, question_key, expected_bias in (
+        ("sycophancy", "incorrect_phrase", "incorrect_question", "sycophancy_incorrect"),
+        ("sycophancy_correct", "correct_phrase", "correct_question", "sycophancy_correct"),
     ):
         pairs = run(checkout, tmp_path / f"{hint}.jsonl", "--hint", hint)
         for i, pair in enumerate(pairs):
             metadata = env_row(i)["prompt_metadata"]
-            assert metadata[question_key] in pair["biased_messages"][-1]["content"]
             content = pair["biased_messages"][-1]["content"]
-            cued_line = f"({pair['biased_option']}) {metadata[phrase_key]}"
-            assert cued_line in content
-            expected_bias = "sycophancy_correct" if hint == "sycophancy_correct" else "sycophancy_incorrect"
+            assert metadata[question_key] in content
+            assert f"({pair['biased_option']}) {metadata[phrase_key]}" in content
             assert pair["bias_type"] == expected_bias
 
 
@@ -136,8 +137,8 @@ def test_output_is_a_verified_artifact_with_provenance(tmp_path):
     assert len(pairs) == 1
     loaded, manifest = read_verified_jsonl_artifact(
         output,
-        expected_schema=converter.PAIR_ARTIFACT_SCHEMA,
-        expected_schema_version=converter.PAIR_ARTIFACT_SCHEMA_VERSION,
+        expected_schema=PAIR_ARTIFACT_SCHEMA,
+        expected_schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
     )
     assert len(loaded) == 1
     provenance = manifest["provenance"]
@@ -149,9 +150,9 @@ def test_output_is_a_verified_artifact_with_provenance(tmp_path):
 
 
 def _real_checkout() -> Path | None:
-    candidate = os.environ.get("REWARDHACK_DIR", "/home/user/ariahw/rl-rewardhacking-ext")
-    path = Path(candidate)
-    return path if (path / "results" / "data" / "icliniq_train_filtered.jsonl").exists() else None
+    return checkout_or_none(
+        "REWARDHACK_DIR", "/home/user/ariahw/rl-rewardhacking-ext", "results/data/icliniq_train_filtered.jsonl"
+    )
 
 
 @pytest.mark.skipif(_real_checkout() is None, reason="no rl-rewardhacking-ext checkout available")
@@ -168,6 +169,4 @@ def test_against_real_checkout(tmp_path):
     builder = load_script("make_vdct_dataset")
     parquet = tmp_path / "vdct.parquet"
     builder.main(["--input", str(output), "--output", str(parquet)])
-    import pandas as pd
-
-    assert len(pd.read_parquet(parquet)) == 32
+    assert parquet_row_count(parquet) == 8 * 4

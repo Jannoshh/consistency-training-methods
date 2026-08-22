@@ -89,7 +89,13 @@ if str(_RMCT_ROOT) not in sys.path:
 from recipe.rmct.rmct_core import centered_kl_penalty  # re-export; bootstraps slime_port
 from slime_port.advantages import normalize_grouped
 
-from .vdct_schema import ANSWER_KIND, DISTRIBUTION_KIND, REFERENCE_VARIANT, TRAINING_VARIANT
+from .vdct_schema import (
+    ANSWER_KIND,
+    DISTRIBUTION_KIND,
+    REFERENCE_VARIANT,
+    TRAINING_VARIANT,
+    VDCTConfig,
+)
 
 __all__ = [
     "ANSWER_KIND",
@@ -138,16 +144,6 @@ class VDCTRow:
     parse_ok: bool
     option_distribution: tuple[float, ...] | None = None
     answer_index: int | None = None
-
-
-@dataclass
-class VDCTConfig:
-    """The ``vdct`` hydra block's math-relevant fields."""
-
-    lambda_log_score: float = 1.0
-    consistency_weight: float = 1.0  # 0.0 = the proper-scoring-only ablation arm
-    epsilon: float = 1e-3
-    normalization: str = "per_item"  # per_item | pooled, slime_port semantics
 
 
 @dataclass
@@ -312,6 +308,10 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
     flat_rewards: list[float] = []
     flat_row_indices: list[int] = []
     slices: list[tuple[int, int]] = []
+    # The reward target and the tv_cue_mean metric read the SAME aggregation,
+    # so they cannot drift (mean_side_distributions is also the diagnostics'
+    # definition of a side mean).
+    side_means = mean_side_distributions(rows)
     q_ref_target: dict[str, list[float] | None] = {}
 
     n_sides_missing_answers = 0
@@ -334,9 +334,7 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
             ]
             for variant in (REFERENCE_VARIANT, TRAINING_VARIANT)
         }
-        parsed_ref_dists = [rows[i].option_distribution for i in dist_rows[REFERENCE_VARIANT] if rows[i].parse_ok]
-
-        target = mean_distribution(parsed_ref_dists) if parsed_ref_dists else None
+        target = side_means.get(group_id, {}).get(REFERENCE_VARIANT)
         q_ref_target[group_id] = target
 
         for variant in (REFERENCE_VARIANT, TRAINING_VARIANT):
@@ -406,7 +404,7 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
 
     tv_values = [
         total_variation(sides[TRAINING_VARIANT], sides[REFERENCE_VARIANT])
-        for sides in mean_side_distributions(rows).values()
+        for sides in side_means.values()
         if sides[REFERENCE_VARIANT] is not None and sides[TRAINING_VARIANT] is not None
     ]
 
@@ -488,21 +486,19 @@ def build_rows(non_tensor_batch: dict) -> list[VDCTRow]:
 
     dists = column("option_distribution")
     answer_indices = column("answer_index")
-    rows = []
-    for i in range(n):
-        dist = dists[i]
-        answer_index = answer_indices[i]
-        rows.append(
-            VDCTRow(
-                group_id=str(non_tensor_batch["group_id"][i]),
-                variant=str(non_tensor_batch["variant"][i]),
-                kind=str(non_tensor_batch["kind"][i]),
-                parse_ok=bool(non_tensor_batch["parse_ok"][i]),
-                option_distribution=tuple(float(v) for v in dist) if dist is not None else None,
-                answer_index=int(answer_index) if answer_index is not None else None,
-            )
-        )
-    return rows
+    return rows_from_records(
+        [
+            {
+                "group_id": non_tensor_batch["group_id"][i],
+                "variant": non_tensor_batch["variant"][i],
+                "kind": non_tensor_batch["kind"][i],
+                "parse_ok": non_tensor_batch["parse_ok"][i],
+                "option_distribution": dists[i],
+                "answer_index": answer_indices[i],
+            }
+            for i in range(n)
+        ]
+    )
 
 
 def rows_from_records(records: list[dict]) -> list[VDCTRow]:

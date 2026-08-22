@@ -4,10 +4,15 @@
 The Phase 2 acceptance's "one dry-resolved config prints the full run plan":
 composes ``recipe/vdct/config/vdct_trainer.yaml`` on top of verl's
 ``ppo_trainer`` defaults (exactly what ``main_vdct`` does at launch), applies
-any extra hydra overrides from the command line, checks the keys the recipe
-depends on, and prints the resolved run plan. Run it as a preflight before
-submitting a pod job — a typo'd override or a key that verl renamed fails
-here instead of after the first rollout.
+any extra hydra overrides from the command line, checks the keys and
+invariants the recipe depends on, and prints the resolved run plan. Run it as
+a preflight before submitting a pod job — a typo'd override or a key that
+verl renamed fails here instead of after the first rollout.
+
+The contract lives in the recipe, not here: the ``vdct.*`` key list derives
+from ``VDCTConfig``'s fields, and the invariant checks are
+``vdct_schema.vdct_config_problems`` — the same function ``main_vdct`` and
+``RayVDCTTrainer`` enforce at launch.
 
 Needs ``hydra-core`` and ``omegaconf`` (present in any verl environment).
 
@@ -21,22 +26,28 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import fields
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
+_RECIPE_ROOT = Path(__file__).resolve().parents[1]
+if str(_RECIPE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_RECIPE_ROOT))
+
+from recipe.vdct.vdct_schema import ROWS_PER_DATAPOINT, VDCTConfig, vdct_config_problems
+
 _CONFIG_DIR = Path(__file__).resolve().parents[1] / "recipe" / "vdct" / "config"
+_MISSING = "\0missing\0"  # OmegaConf.select default must be a config-representable value
 
 # Keys the recipe reads at runtime; a rename on either side must fail here.
+# The vdct block derives from VDCTConfig so a new knob is covered automatically.
 REQUIRED_KEYS = [
+    *(f"vdct.{spec.name}" for spec in fields(VDCTConfig)),
     "vdct.kl_coef",
     "vdct.kl_logprob_source",
-    "vdct.lambda_log_score",
-    "vdct.consistency_weight",
-    "vdct.epsilon",
     "vdct.parse_sum_tolerance",
-    "vdct.normalization",
     "algorithm.use_kl_in_reward",
     "actor_rollout_ref.actor.use_kl_loss",
     "actor_rollout_ref.rollout.n",
@@ -89,21 +100,14 @@ def main(argv: list[str] | None = None) -> int:
 
     config = resolve(args.verl_dir, args.overrides)
 
-    missing = [key for key in REQUIRED_KEYS if OmegaConf.select(config, key, default="\0") == "\0"]
+    missing = [key for key in REQUIRED_KEYS if OmegaConf.select(config, key, default=_MISSING) == _MISSING]
     if missing:
         print("error: resolved config is missing keys the recipe reads:", file=sys.stderr)
         for key in missing:
             print(f"  {key}", file=sys.stderr)
         return 1
 
-    problems = []
-    if config.trainer.use_v1:
-        problems.append("trainer.use_v1 must be False (the recipe overrides the V0 trainer)")
-    if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
-        problems.append("verl's own KL switches must be off; vdct.kl_coef owns the KL term")
-    rows = int(config.data.train_batch_size)
-    if rows % 4 != 0:
-        problems.append(f"data.train_batch_size={rows} is not 4 x datapoints_per_step")
+    problems = vdct_config_problems(config)
     if problems:
         for problem in problems:
             print(f"error: {problem}", file=sys.stderr)
@@ -114,8 +118,10 @@ def main(argv: list[str] | None = None) -> int:
     print("resolved run plan (vdct_trainer over verl ppo_trainer):")
     for key in PLAN_KEYS:
         print(f"  {key} = {OmegaConf.select(config, key)}")
+    rows = int(config.data.train_batch_size)
     n = int(config.actor_rollout_ref.rollout.n)
-    print(f"  -> {rows // 4} datapoints/step, {rows * n} rollouts/step, {(rows // 2) * n} carrying gradient")
+    datapoints = rows // ROWS_PER_DATAPOINT
+    print(f"  -> {datapoints} datapoints/step, {rows * n} rollouts/step, {datapoints * 2 * n} carrying gradient")
     kl = float(config.vdct.kl_coef)
     print(f"  -> reference forward {'ON (KL vs frozen base)' if kl != 0.0 else 'OFF (vdct.kl_coef=0)'}")
     print("ok")

@@ -31,9 +31,12 @@ right stays in the source repo's files.
 Hint modes mirror the environment's registry: ``sycophancy_half`` (the paper's
 standard, seeded 50/50 per question), ``sycophancy`` (always the incorrect
 stance), ``sycophancy_correct`` (always the correct one). The answer-choice
-header and CoT instruction are loaded from the pinned mcq-bias package's
-``pipeline/records.py`` by file path (stdlib-only module), so the surface
-format matches the Chua-suite prompts the rest of the sycophancy work uses.
+header and the ``--prompt-style`` instruction suffix come from the pinned
+mcq-bias package's ``pipeline/records.py`` (its own ``instruction_suffix``,
+loaded by file path since the package ``__init__`` imports inspect_ai), so
+the surface format matches the Chua-suite prompts the rest of the sycophancy
+work uses — including the same ``none`` / ``encourage_cot`` style choice as
+``ctm_data.adapters.mcq_bias.materialize``.
 
 The output is a verified ``ctm.artifacts`` JSONL/manifest pair, consumable by
 ``make_vdct_dataset.py`` and ``../rmct_verl/scripts/make_rmct_dataset.py``
@@ -49,17 +52,16 @@ import random
 import sys
 from pathlib import Path
 
-from ctm.artifacts import artifact_manifest_path, plain_file_identity, write_verified_jsonl_artifact
+from ctm.artifacts import plain_file_identity
 
 _RECIPE_ROOT = Path(__file__).resolve().parents[1]
 if str(_RECIPE_ROOT) not in sys.path:
     sys.path.insert(0, str(_RECIPE_ROOT))
 
-from recipe.vdct.vdct_schema import git_head_sha, read_jsonl_rows
+from recipe.vdct.vdct_schema import git_head_sha, load_module_from_path, publish_pair_artifact, read_jsonl_rows
 
-PAIR_ARTIFACT_SCHEMA = "vdct.paired_prompts"
-PAIR_ARTIFACT_SCHEMA_VERSION = 1
 OPTION_LABELS = ["A", "B"]
+PROMPT_STYLES = ("none", "encourage_cot")
 HINT_MODES = ("sycophancy_half", "sycophancy", "sycophancy_correct")
 SPLIT_FILES = {
     "train": "icliniq_train_filtered.jsonl",
@@ -70,25 +72,22 @@ ROW_REQUIRED = {"id", "prompt", "question", "prompt_metadata"}
 METADATA_REQUIRED = ("correct_phrase", "incorrect_phrase", "correct_question", "incorrect_question")
 
 
-def load_prompt_format():
-    """``(ANSWER_CHOICES_HEADER, COT_INSTRUCTION)`` from the pinned mcq-bias
-    package's ``pipeline/records.py``, loaded by file path — the package
-    ``__init__`` imports inspect_ai, but records.py itself is stdlib-only
-    (same pattern as the slime port's parser loader)."""
+def load_prompt_format(prompt_style: str) -> tuple[str, str]:
+    """``(ANSWER_CHOICES_HEADER, instruction suffix)`` from the pinned
+    mcq-bias package's ``pipeline/records.py`` — its ``instruction_suffix``
+    owns the answer-format tail, so this pool's prompts track the Chua
+    reconstruction instead of hand-assembling it. Loaded by file path: the
+    package ``__init__`` imports inspect_ai, but records.py is stdlib-only."""
     spec = importlib.util.find_spec("mcq_bias")
     if spec is None or spec.origin is None:
         raise SystemExit("mcq-bias is not installed; run the environment setup in CLAUDE.md")
-    records_path = Path(spec.origin).parent / "pipeline" / "records.py"
-    mod_spec = importlib.util.spec_from_file_location("_mcq_bias_records", records_path)
-    module = importlib.util.module_from_spec(mod_spec)
-    mod_spec.loader.exec_module(module)
-    return module.ANSWER_CHOICES_HEADER, module.COT_INSTRUCTION
+    records = load_module_from_path("_mcq_bias_records", Path(spec.origin).parent / "pipeline" / "records.py")
+    return records.ANSWER_CHOICES_HEADER, records.instruction_suffix(prompt_style)
 
 
-def build_pair(row: dict, hint: str, seed: int, choices_header: str, cot_instruction: str) -> dict:
+def build_pair(row: dict, question_id: str, hint: str, seed: int, choices_header: str, instruction: str) -> dict:
     """One native paired-prompt row; deterministic per (seed, question id)."""
     metadata = row["prompt_metadata"]
-    question_id = f"icliniq-{row['id']}"
     rng = random.Random(f"{seed}:{question_id}")
 
     if hint == "sycophancy_half":
@@ -107,7 +106,7 @@ def build_pair(row: dict, hint: str, seed: int, choices_header: str, cot_instruc
         result = [dict(m) for m in row["prompt"]]
         if not result or result[-1].get("role") != "user":
             raise ValueError(f"row {row['id']}: prompt does not end with a user message")
-        result[-1]["content"] = patient_question + choices_block + cot_instruction
+        result[-1]["content"] = patient_question + choices_block + instruction
         return result
 
     return {
@@ -124,13 +123,13 @@ def build_pair(row: dict, hint: str, seed: int, choices_header: str, cot_instruc
     }
 
 
-def build_pairs(rows: list[dict], hint: str, seed: int) -> tuple[list[dict], dict[str, int]]:
-    choices_header, cot_instruction = load_prompt_format()
+def build_pairs(rows: list[dict], hint: str, seed: int, prompt_style: str) -> tuple[list[dict], dict[str, int]]:
+    choices_header, instruction = load_prompt_format(prompt_style)
     pairs: list[dict] = []
-    counts = {"n_rows": len(rows), "n_missing_metadata": 0, "n_duplicates": 0}
+    counts = {"n_source_rows": len(rows), "n_missing_metadata": 0, "n_duplicates": 0}
     seen: set[str] = set()
     for row in rows:
-        metadata = row.get("prompt_metadata") or {}
+        metadata = row["prompt_metadata"]
         if not all(metadata.get(key) for key in METADATA_REQUIRED):
             counts["n_missing_metadata"] += 1
             continue
@@ -139,7 +138,7 @@ def build_pairs(rows: list[dict], hint: str, seed: int) -> tuple[list[dict], dic
             counts["n_duplicates"] += 1
             continue
         seen.add(question_id)
-        pairs.append(build_pair(row, hint, seed, choices_header, cot_instruction))
+        pairs.append(build_pair(row, question_id, hint, seed, choices_header, instruction))
     return pairs, counts
 
 
@@ -153,6 +152,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--split", choices=sorted(SPLIT_FILES), default="train")
     parser.add_argument("--hint", choices=HINT_MODES, default="sycophancy_half", help="which leading question is cued")
+    parser.add_argument(
+        "--prompt-style",
+        choices=PROMPT_STYLES,
+        default="none",
+        help="mcq-bias answer-format style (none = format line only, for models "
+        "that reason in their own channel; encourage_cot = explicit step-by-step)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="cue-choice and option-order seed")
     parser.add_argument(
         "--ids-from",
@@ -168,9 +174,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.rewardhack_dir is None:
         raise SystemExit("pass --rewardhack-dir or set REWARDHACK_DIR to an ariahw/rl-rewardhacking-ext checkout")
-    manifest_path = artifact_manifest_path(args.output)
-    if (args.output.exists() or manifest_path.exists()) and not args.force:
-        raise SystemExit(f"{args.output} exists; pass --force to overwrite")
 
     source_path = args.rewardhack_dir / "results" / "data" / SPLIT_FILES[args.split]
     if not source_path.exists():
@@ -184,20 +187,15 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"{len(missing)} ids from {args.ids_from} are not in the {args.split} split")
         rows = [by_id[i] for i in selected]
 
-    pairs, counts = build_pairs(rows, args.hint, args.seed)
+    pairs, counts = build_pairs(rows, args.hint, args.seed, args.prompt_style)
     if args.n_datapoints is not None:
         if len(pairs) < args.n_datapoints:
             raise SystemExit(f"need {args.n_datapoints} pairs, built {len(pairs)}")
         pairs = pairs[: args.n_datapoints]
 
-    if args.force:
-        args.output.unlink(missing_ok=True)
-        manifest_path.unlink(missing_ok=True)
-    write_verified_jsonl_artifact(
+    publish_pair_artifact(
         args.output,
         pairs,
-        artifact_schema=PAIR_ARTIFACT_SCHEMA,
-        schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
         provenance={
             "rewardhack_dir": str(args.rewardhack_dir),
             "rewardhack_sha": git_head_sha(args.rewardhack_dir),
@@ -205,15 +203,13 @@ def main(argv: list[str] | None = None) -> None:
             "ids_from": plain_file_identity(args.ids_from) if args.ids_from is not None else None,
             "split": args.split,
             "hint": args.hint,
+            "prompt_style": args.prompt_style,
             "seed": args.seed,
             **counts,
         },
-        nonempty=True,
+        force=args.force,
     )
-
     n_incorrect = sum(1 for pair in pairs if pair["bias_type"] == "sycophancy_incorrect")
-    print(f"wrote {len(pairs)} pairs -> {args.output}")
-    print(f"  manifest -> {manifest_path}")
     print(f"  cue split: {n_incorrect} incorrect-stance, {len(pairs) - n_incorrect} correct-stance")
     print(f"  skipped: {counts['n_missing_metadata']} missing metadata, {counts['n_duplicates']} duplicates")
 

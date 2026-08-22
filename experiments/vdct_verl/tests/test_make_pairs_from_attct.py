@@ -7,11 +7,11 @@ test runs against a real c-wei/AttCT checkout (``ATTCT_DIR`` or the
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
-from vdct_test_helpers import load_script, write_jsonl
+from recipe.vdct.vdct_schema import PAIR_ARTIFACT_SCHEMA, PAIR_ARTIFACT_SCHEMA_VERSION
+from vdct_test_helpers import checkout_or_none, load_script, parquet_row_count, write_jsonl
 
 from ctm.artifacts import read_verified_jsonl_artifact
 
@@ -88,8 +88,8 @@ def test_output_is_a_verified_artifact_with_provenance(tmp_path):
     # carries the converter's provenance.
     rows, manifest = read_verified_jsonl_artifact(
         output,
-        expected_schema=converter.PAIR_ARTIFACT_SCHEMA,
-        expected_schema_version=converter.PAIR_ARTIFACT_SCHEMA_VERSION,
+        expected_schema=PAIR_ARTIFACT_SCHEMA,
+        expected_schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
     )
     assert len(rows) == 1
     provenance = manifest["provenance"]
@@ -97,6 +97,7 @@ def test_output_is_a_verified_artifact_with_provenance(tmp_path):
     assert provenance["n_duplicates"] == 1
     assert provenance["seed"] == 42
     assert provenance["source"]["row_count"] == 3
+    assert provenance["n_source_rows"] == 3
 
 
 def test_existing_output_is_refused_without_force(tmp_path):
@@ -109,9 +110,7 @@ def test_existing_output_is_refused_without_force(tmp_path):
 
 
 def _real_checkout() -> Path | None:
-    candidate = os.environ.get("ATTCT_DIR", "/home/user/c-wei/AttCT")
-    path = Path(candidate)
-    return path if (path / "data" / "wrappers.py").exists() else None
+    return checkout_or_none("ATTCT_DIR", "/home/user/c-wei/AttCT", "data/wrappers.py")
 
 
 @pytest.mark.skipif(_real_checkout() is None, reason="no c-wei/AttCT checkout available")
@@ -129,6 +128,4 @@ def test_against_real_attct_checkout(tmp_path):
     builder = load_script("make_vdct_dataset")
     parquet = tmp_path / "vdct.parquet"
     builder.main(["--input", str(output), "--output", str(parquet)])
-    import pandas as pd
-
-    assert len(pd.read_parquet(parquet)) == 32
+    assert parquet_row_count(parquet) == 8 * 4

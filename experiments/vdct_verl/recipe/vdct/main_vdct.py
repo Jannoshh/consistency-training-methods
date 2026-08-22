@@ -30,6 +30,8 @@ from . import vdct_core
 assert vdct_core
 from recipe.rmct.main_rmct import RMCTTaskRunner
 
+from .vdct_schema import vdct_config_problems
+
 
 def _uses_reference_policy(config) -> bool:
     """The reference forward exists only for the VDCT KL term."""
@@ -118,11 +120,9 @@ class VDCTTaskRunner(RMCTTaskRunner):
 def main(config):
     auto_set_device(config)
     config = migrate_legacy_reward_impl(config)
-    if config.trainer.get("use_v1", True):
-        raise ValueError(
-            "The VDCT recipe overrides the V0 RayPPOTrainer._update_actor; set trainer.use_v1=False "
-            "(config/vdct_trainer.yaml pins it). Porting to the V1 TransferQueue trainer is separate work."
-        )
+    problems = vdct_config_problems(config)
+    if problems:
+        raise ValueError("; ".join(problems))
     run_ppo(config, task_runner_class=ray.remote(num_cpus=1)(VDCTTaskRunner))
 
 

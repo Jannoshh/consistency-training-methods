@@ -45,6 +45,7 @@ from .vdct_core import (
     dump_columns,
     merge_dump_fields,
 )
+from .vdct_schema import vdct_config_problems
 
 logger = logging.getLogger(__name__)
 
@@ -65,38 +66,23 @@ _DUMP_EXCLUDED_COLUMNS = {
 }
 
 
-def _vdct_config(vdct_cfg) -> VDCTConfig:
-    """Build the math config from the hydra ``vdct`` block."""
-    return VDCTConfig(
-        lambda_log_score=float(vdct_cfg.get("lambda_log_score", 1.0)),
-        consistency_weight=float(vdct_cfg.get("consistency_weight", 1.0)),
-        epsilon=float(vdct_cfg.get("epsilon", 1e-3)),
-        normalization=vdct_cfg.get("normalization", "per_item"),
-    )
-
-
 class RayVDCTTrainer(RayPPOTrainer):
     """RayPPOTrainer with the VDCT advantage/KL/masking stage."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.vdct_config = self.config.vdct
-        self.vdct_math_config = _vdct_config(self.vdct_config)
+        self.vdct_math_config = VDCTConfig.from_mapping(self.vdct_config)
         self.vdct_kl_coef = float(self.vdct_config.get("kl_coef", 0.0))
         # Must be set before init_workers(). The KL term targets the frozen
         # base even though both of verl's own KL switches are off — but with
         # the term disabled there is nothing to compute against, so skip the
         # per-step reference forward entirely.
         self.use_reference_policy = self.vdct_kl_coef != 0.0
-        kl_source = self.vdct_config.get("kl_logprob_source", "old_log_probs")
-        if kl_source not in ("old_log_probs", "rollout_log_probs"):
-            raise ValueError(f"vdct.kl_logprob_source must be old_log_probs or rollout_log_probs, got {kl_source!r}")
-        self.vdct_kl_source = kl_source
-        if self.config.algorithm.get("use_kl_in_reward", False) or self.config.actor_rollout_ref.actor.use_kl_loss:
-            raise ValueError(
-                "VDCT owns the KL term; set algorithm.use_kl_in_reward=False and "
-                "actor_rollout_ref.actor.use_kl_loss=False (vdct.kl_coef controls the VDCT KL)."
-            )
+        self.vdct_kl_source = self.vdct_config.get("kl_logprob_source", "old_log_probs")
+        problems = vdct_config_problems(self.config)
+        if problems:
+            raise ValueError("; ".join(problems))
 
     def _update_actor(self, batch: DataProto) -> DataProto:
         rows = build_rows(batch.non_tensor_batch)
