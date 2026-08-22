@@ -57,7 +57,11 @@ def _last_block(text: str) -> str | None:
     return text[start + len(DISTRIBUTION_OPEN) : end]
 
 
-def parse_option_distribution(text: str, option_labels: list[str]) -> list[float] | None:
+def parse_option_distribution(
+    text: str,
+    option_labels: list[str],
+    sum_tolerance: float = SUM_TOLERANCE,
+) -> list[float] | None:
     """Parse the stated distribution, dense in ``option_labels`` order.
 
     Strict by design (format compliance is itself trained): returns None
@@ -65,7 +69,9 @@ def parse_option_distribution(text: str, option_labels: list[str]) -> list[float
     exactly once and nothing else, each line ``LABEL: value`` with a
     non-negative number. Values may be unit probabilities (total ~1) or
     percentages (total ~100, ``%`` suffixes allowed); the scale is decided
-    from the total, within ``SUM_TOLERANCE`` relative tolerance. On success
+    from the total, within ``sum_tolerance`` relative tolerance
+    (``vdct.parse_sum_tolerance`` in a run's resolved config — a reward-policy
+    knob, since format compliance is trained). On success
     the vector is renormalized to sum 1, floored at ``PROBABILITY_FLOOR``,
     and renormalized once more, so every entry is strictly positive and the
     result is a proper distribution. (The reward-side ``log_score`` applies
@@ -97,10 +103,10 @@ def parse_option_distribution(text: str, option_labels: list[str]) -> list[float
         return None
 
     total = sum(values.values())
-    if abs(total - 1.0) <= SUM_TOLERANCE:
+    if abs(total - 1.0) <= sum_tolerance:
         if saw_percent_sign:
             return None  # "%": the numbers claim percent but total ~1 — ambiguous
-    elif not abs(total - 100.0) <= 100.0 * SUM_TOLERANCE:
+    elif not abs(total - 100.0) <= 100.0 * sum_tolerance:
         return None
 
     # _LINE_RE admits no sign, so every value is non-negative, and the total

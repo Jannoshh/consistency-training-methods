@@ -60,6 +60,14 @@ must also set `wandb_project`. No dataset artifacts are committed here.
   registry or setting coupling.
 - `scripts/run_experiment.py` — minimal YAML command pipeline; training and
   evaluation entries are independent.
+- Decision 2026-08-22: sycophancy consistency-training pools and the
+  three-way sycophancy evaluation (held-out-bias BRR, bias-on-MMLU BRR,
+  Anthropic model-written-evals sycophancy rate) are sourced from a
+  [c-wei/AttCT](https://github.com/c-wei/AttCT) checkout rather than
+  generated in-tree; `experiments/vdct_verl/scripts/make_pairs_from_attct.py`
+  freezes its `sycophancy_bct` assets into the native paired-prompt schema
+  for the RL recipes, and evaluation runs through that repo's `run_evals.py`.
+  The RL implementations (RMCT/VDCT on verl) stay in this repository.
 - ACT/AttCT/MLPCT losses (`ctm/training/consistency_losses.py`, local execution
   in `ctm/backends/local/engine.py`, and paired-datum construction in
   `ctm/training/consistency_data.py`)

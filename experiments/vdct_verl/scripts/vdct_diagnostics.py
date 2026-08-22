@@ -48,6 +48,8 @@ from recipe.vdct.vdct_core import (
     TRAINING_VARIANT,
     entropy,
     mean_distribution,
+    mean_side_distributions,
+    rows_from_records,
     total_variation,
 )
 from recipe.vdct.vdct_schema import read_jsonl_rows
@@ -136,18 +138,20 @@ def entropy_report(sides: dict[tuple[str, str], dict]) -> dict:
     }
 
 
-def cue_invariance_report(sides: dict[tuple[str, str], dict]) -> dict:
+def cue_invariance_report(rows: list[dict], sides: dict[tuple[str, str], dict]) -> dict:
+    # Side means come from the SAME aggregation the training-time
+    # vdct/tv_cue_mean metric uses (vdct_core.mean_side_distributions).
+    side_means = mean_side_distributions(rows_from_records(rows))
     tv_values: list[float] = []
     biased_shares: list[float] = []
     n_largest_shift_on_cued = 0
-    for group_id in {g for g, _ in sides}:
-        reference = sides.get((group_id, REFERENCE_VARIANT))
-        training = sides.get((group_id, TRAINING_VARIANT))
-        if not reference or not training or not reference["dists"] or not training["dists"]:
+    for group_id, means in side_means.items():
+        mean_ref = means[REFERENCE_VARIANT]
+        mean_train = means[TRAINING_VARIANT]
+        if mean_ref is None or mean_train is None:
             continue
-        mean_ref = mean_distribution(reference["dists"])
-        mean_train = mean_distribution(training["dists"])
         tv_values.append(total_variation(mean_train, mean_ref))
+        training = sides[(group_id, TRAINING_VARIANT)]
         labels = training["option_labels"]
         biased = training["biased_option"]
         if biased is None or biased not in labels:
@@ -180,7 +184,7 @@ def build_report(rows: list[dict]) -> dict:
         "n_sides": len(sides),
         "calibration": calibration_report(sides),
         "entropy": entropy_report(sides),
-        "cue_invariance": cue_invariance_report(sides),
+        "cue_invariance": cue_invariance_report(rows, sides),
     }
 
 

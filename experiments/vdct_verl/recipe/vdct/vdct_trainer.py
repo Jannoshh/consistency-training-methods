@@ -69,6 +69,7 @@ def _vdct_config(vdct_cfg) -> VDCTConfig:
     """Build the math config from the hydra ``vdct`` block."""
     return VDCTConfig(
         lambda_log_score=float(vdct_cfg.get("lambda_log_score", 1.0)),
+        consistency_weight=float(vdct_cfg.get("consistency_weight", 1.0)),
         epsilon=float(vdct_cfg.get("epsilon", 1e-3)),
         normalization=vdct_cfg.get("normalization", "per_item"),
     )

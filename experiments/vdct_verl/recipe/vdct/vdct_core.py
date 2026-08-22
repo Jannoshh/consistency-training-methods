@@ -23,13 +23,17 @@ Distribution rollouts carry gradient on both sides; answer rollouts never do
 (they exist only as outcome samples for the proper-scoring term — the
 structural block against self-fulfilling distributions).
 
-    training side:   r = -JS(q, q_ref_target) + lambda * mean_m log(max(q[a_m], eps))
-    reference side:  r =                        lambda * mean_m log(max(q[a_m], eps))
+    training side:   r = -w_c * JS(q, q_ref_target) + lambda * mean_m log(max(q[a_m], eps))
+    reference side:  r =                              lambda * mean_m log(max(q[a_m], eps))
+
+``w_c`` is ``consistency_weight`` (default 1). The plan's ablation arms map
+onto the two weights: ``lambda = 0`` is the no-proper-scoring arm and
+``w_c = 0`` is the proper-scoring-only arm.
 
 ``q_ref_target`` is this step's mean parsed reference-side distribution for
 the group. Answers ``a_m`` always come from the SAME side's answer rollouts.
 An unparseable distribution is excluded from ``q_ref_target`` and receives
-the worst-case reward ``-JS_MAX + lambda * log(eps)`` — strictly below any
+the worst-case reward ``-w_c * JS_MAX + lambda * log(eps)`` — at or below any
 parseable reward on either side — while still carrying gradient, so format
 compliance is itself trained.
 
@@ -104,7 +108,9 @@ __all__ = [
     "js_divergence",
     "log_score",
     "mean_distribution",
+    "mean_side_distributions",
     "merge_dump_fields",
+    "rows_from_records",
     "total_variation",
     "worst_case_reward",
 ]
@@ -139,6 +145,7 @@ class VDCTConfig:
     """The ``vdct`` hydra block's math-relevant fields."""
 
     lambda_log_score: float = 1.0
+    consistency_weight: float = 1.0  # 0.0 = the proper-scoring-only ablation arm
     epsilon: float = 1e-3
     normalization: str = "per_item"  # per_item | pooled, slime_port semantics
 
@@ -213,6 +220,26 @@ def mean_distribution(dists: list[tuple[float, ...]]) -> list[float]:
     return [sum(d[i] for d in dists) / len(dists) for i in range(length)]
 
 
+def mean_side_distributions(rows: list[VDCTRow]) -> dict[str, dict[str, list[float] | None]]:
+    """Mean parsed stated distribution per (group, variant) side, or None.
+
+    The one definition of side-level aggregation, shared by the training-time
+    ``vdct/tv_cue_mean`` metric and the offline diagnostics' cue-invariance
+    report so the two cannot drift apart.
+    """
+    per_side: dict[str, dict[str, list[tuple[float, ...]]]] = {}
+    for row in rows:
+        if row.kind != DISTRIBUTION_KIND:
+            continue
+        group = per_side.setdefault(row.group_id, {REFERENCE_VARIANT: [], TRAINING_VARIANT: []})
+        if row.parse_ok:
+            group[row.variant].append(row.option_distribution)
+    return {
+        group_id: {variant: mean_distribution(dists) if dists else None for variant, dists in sides.items()}
+        for group_id, sides in per_side.items()
+    }
+
+
 def log_score(
     q: list[float] | tuple[float, ...],
     answer_indices: list[int],
@@ -233,11 +260,12 @@ def log_score(
 
 
 def worst_case_reward(config: VDCTConfig) -> float:
-    """Reward for an unparseable distribution: maximal JS penalty plus the
-    floored log score — strictly below any parseable distribution's reward on
-    either side (reference-side parseable rewards are bounded below by
-    ``lambda * log(eps)``)."""
-    return -JS_MAX + config.lambda_log_score * math.log(config.epsilon)
+    """Reward for an unparseable distribution: maximal (weighted) JS penalty
+    plus the floored log score — at or below any parseable distribution's
+    reward on either side (reference-side parseable rewards are bounded below
+    by ``lambda * log(eps)``; see the README's deviations table for the
+    per-side asymmetry this deliberately keeps)."""
+    return -config.consistency_weight * JS_MAX + config.lambda_log_score * math.log(config.epsilon)
 
 
 # ── Row → advantage assembly ─────────────────────────────────────────────────
@@ -291,7 +319,6 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
     js_train = [0.0, 0]
     log_score_sums = {REFERENCE_VARIANT: [0.0, 0], TRAINING_VARIANT: [0.0, 0]}
     entropy_sums = {REFERENCE_VARIANT: [0.0, 0], TRAINING_VARIANT: [0.0, 0]}
-    tv_sum, tv_n = 0.0, 0
 
     for group_id in group_order:
         indices = by_group[group_id]
@@ -308,14 +335,9 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
             for variant in (REFERENCE_VARIANT, TRAINING_VARIANT)
         }
         parsed_ref_dists = [rows[i].option_distribution for i in dist_rows[REFERENCE_VARIANT] if rows[i].parse_ok]
-        parsed_train_dists = [rows[i].option_distribution for i in dist_rows[TRAINING_VARIANT] if rows[i].parse_ok]
 
         target = mean_distribution(parsed_ref_dists) if parsed_ref_dists else None
         q_ref_target[group_id] = target
-
-        if target is not None and parsed_train_dists:
-            tv_sum += total_variation(mean_distribution(parsed_train_dists), target)
-            tv_n += 1
 
         for variant in (REFERENCE_VARIANT, TRAINING_VARIANT):
             side_rows = dist_rows[variant]
@@ -344,7 +366,7 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
                     # reference side has no anchor (see module docstring).
                     if variant == TRAINING_VARIANT:
                         js = js_divergence(q, target)
-                        reward -= js
+                        reward -= config.consistency_weight * js
                         js_train[0] += js
                         js_train[1] += 1
                     entropy_sums[variant][0] += entropy(q)
@@ -375,18 +397,30 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
     n_dist_parsed = sum(1 for row in rows if row.kind == DISTRIBUTION_KIND and row.parse_ok)
     n_answer_parsed = sum(1 for row in rows if row.kind == ANSWER_KIND and row.parse_ok)
 
+    def _side_parse_rate(variant: str) -> float:
+        side = [row for row in rows if row.kind == DISTRIBUTION_KIND and row.variant == variant]
+        return sum(row.parse_ok for row in side) / max(len(side), 1)
+
     def _mean(pair: list[float]) -> float:
         return pair[0] / pair[1] if pair[1] else 0.0
 
+    tv_values = [
+        total_variation(sides[TRAINING_VARIANT], sides[REFERENCE_VARIANT])
+        for sides in mean_side_distributions(rows).values()
+        if sides[REFERENCE_VARIANT] is not None and sides[TRAINING_VARIANT] is not None
+    ]
+
     metrics = {
         "vdct/dist_parse_rate": n_dist_parsed / max(n_dist, 1),
+        "vdct/dist_parse_rate_ref": _side_parse_rate(REFERENCE_VARIANT),
+        "vdct/dist_parse_rate_train": _side_parse_rate(TRAINING_VARIANT),
         "vdct/answer_parse_rate": n_answer_parsed / max(n_answer, 1),
         "vdct/js_train_mean": _mean(js_train),
         "vdct/log_score_train_mean": _mean(log_score_sums[TRAINING_VARIANT]),
         "vdct/log_score_ref_mean": _mean(log_score_sums[REFERENCE_VARIANT]),
         "vdct/entropy_train_mean": _mean(entropy_sums[TRAINING_VARIANT]),
         "vdct/entropy_ref_mean": _mean(entropy_sums[REFERENCE_VARIANT]),
-        "vdct/tv_cue_mean": tv_sum / tv_n if tv_n else 0.0,
+        "vdct/tv_cue_mean": sum(tv_values) / len(tv_values) if tv_values else 0.0,
         "vdct/has_signal": float(has_signal),
         "vdct/n_groups": float(len(group_order)),
         "vdct/n_grad_rows": float(sum(trainable)),
@@ -394,6 +428,7 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
         "vdct/n_unparsed_dist_rows": float(n_unparsed_dist),
         "vdct/sides_missing_answer_samples": float(n_sides_missing_answers),
         "vdct/lambda_log_score": config.lambda_log_score,
+        "vdct/consistency_weight": config.consistency_weight,
     }
     for reason in skip_reasons:
         if reason is not None:
@@ -463,6 +498,26 @@ def build_rows(non_tensor_batch: dict) -> list[VDCTRow]:
                 variant=str(non_tensor_batch["variant"][i]),
                 kind=str(non_tensor_batch["kind"][i]),
                 parse_ok=bool(non_tensor_batch["parse_ok"][i]),
+                option_distribution=tuple(float(v) for v in dist) if dist is not None else None,
+                answer_index=int(answer_index) if answer_index is not None else None,
+            )
+        )
+    return rows
+
+
+def rows_from_records(records: list[dict]) -> list[VDCTRow]:
+    """The VDCT row view of per-rollout dict records (rollout dumps, audit
+    generations) — the record-shaped sibling of :func:`build_rows`."""
+    rows = []
+    for record in records:
+        dist = record.get("option_distribution")
+        answer_index = record.get("answer_index")
+        rows.append(
+            VDCTRow(
+                group_id=str(record["group_id"]),
+                variant=str(record["variant"]),
+                kind=str(record["kind"]),
+                parse_ok=bool(record["parse_ok"]),
                 option_distribution=tuple(float(v) for v in dist) if dist is not None else None,
                 answer_index=int(answer_index) if answer_index is not None else None,
             )

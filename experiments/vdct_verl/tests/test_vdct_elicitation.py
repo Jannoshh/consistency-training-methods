@@ -83,6 +83,13 @@ def test_missing_or_unclosed_block_is_rejected():
     assert parse_option_distribution(f"{DISTRIBUTION_OPEN}\nA: 1\nB: 0\nC: 0\nD: 0", LABELS) is None
 
 
+def test_sum_tolerance_is_configurable():
+    body = "A: 0.5\nB: 0.2\nC: 0.1\nD: 0.05"  # sums to 0.85
+    assert parse_option_distribution(block(body), LABELS) is None
+    parsed = parse_option_distribution(block(body), LABELS, sum_tolerance=0.2)
+    assert parsed == pytest.approx([v / 0.85 for v in (0.5, 0.2, 0.1, 0.05)], abs=1e-9)
+
+
 def test_empty_labels_are_an_error():
     with pytest.raises(ValueError, match="option_labels"):
         parse_option_distribution(block("A: 1"), [])

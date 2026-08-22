@@ -8,7 +8,11 @@ here) and replaces RMCT's one-bit trait with a verbalized probability
 distribution over the answer options.
 
 **Status: Phase 0 + Phase 2 implemented and CPU-tested (2026-08-22). Not yet
-executed on GPU.** Phase 1 (pod bring-up, model confirmation, audit set,
+executed on GPU.** Also verified on CPU: the recipe's verl-facing modules
+import cleanly against the pinned verl `2b0fe51` (agent-loop registration,
+trainer subclass, runner MRO), the hydra overlay dry-resolves against it
+(`scripts/resolve_config.py`), and the full 4,000-prompt data path runs end
+to end (see Data). Phase 1 (pod bring-up, model confirmation, audit set,
 base-model diagnostics, eval-path check) and the Phase 3 smoke are pending;
 per the plan, no training run starts before the Phase 1 and Phase 3 stop
 points are explicitly cleared.
@@ -23,17 +27,20 @@ unmodified paired prompt and exist only as outcome samples (zero gradient —
 the structural block against self-fulfilling distributions). Per
 distribution rollout with parsed distribution `q`:
 
-    training side:   r = -JS(q, q_ref_target) + λ · (1/M) Σ_m log(max(q[a_m], ε))
-    reference side:  r =                         λ · (1/M) Σ_m log(max(q[a_m], ε))
+    training side:   r = -w_c · JS(q, q_ref_target) + λ · (1/M) Σ_m log(max(q[a_m], ε))
+    reference side:  r =                               λ · (1/M) Σ_m log(max(q[a_m], ε))
 
 `q_ref_target` is this step's mean parsed reference-side distribution for
-the group; `a_m` are the same side's parsed answers. There is NO anchor term
+the group; `a_m` are the same side's parsed answers; `w_c` is
+`vdct.consistency_weight` (default 1). There is NO anchor term
 (2026-08-22 decision — the plan's frozen `q_ref_initial` is dropped for
 now, so nothing structurally blocks matched-but-shifted co-drift; the KL
 term, the entropy/calibration diagnostics, and the control arm are the
 monitors, and Phase 1's anchor precomputation step disappears). Unparseable
-distributions get the worst-case reward `-ln2 + λ·log(ε)` and still train
-(format compliance is trained), but are excluded from `q_ref_target`.
+distributions get the worst-case reward `-w_c·ln2 + λ·log(ε)` and still
+train (format compliance is trained), but are excluded from `q_ref_target`;
+parse strictness is a config knob (`vdct.parse_sum_tolerance`), recorded in
+each run's resolved config.
 Advantages: per-(group, side) standardization via the parity-tested
 `slime_port.advantages.normalize_grouped` (per-item mode). The
 batch-centered KL vs the frozen base is reused from the RMCT recipe at its
@@ -57,8 +64,9 @@ grounding: `notes/elicitation_scheme.md`.
 | `recipe/vdct/config/` | Hydra overlay (`vdct_trainer.yaml`) + agent-loop registration. |
 | `scripts/make_pairs_from_attct.py` | c-wei/AttCT `sycophancy_bct` assets → native paired-prompt JSONL, published as a verified `ctm.artifacts` JSONL/manifest pair (see Data). |
 | `scripts/make_vdct_dataset.py` | Paired-prompt JSONL → verl parquet, 4 rows/datapoint. |
-| `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations. |
-| `tests/` | 65 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
+| `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations (side aggregation shared with the training-time metric via `vdct_core.mean_side_distributions`). |
+| `scripts/resolve_config.py` | Preflight: dry-resolves the overlay against a verl checkout, checks every key the recipe reads, prints the run plan. Run it before submitting any pod job. |
+| `tests/` | 73 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
 | `notes/elicitation_scheme.md` | Phase 0 note fixing the elicitation format. |
 
 Run tests: `uv run --no-sync python -m pytest experiments/vdct_verl/tests -q`
@@ -108,6 +116,24 @@ Batch arithmetic: `rollout.n=8` uniform (also fixes M=8 answer samples per
 side), `data.train_batch_size = 4 × datapoints_per_step` (64 for the
 standard 16), one epoch = 4 × datapoints rows.
 
+Verified on the real assets (2026-08-22, AttCT checkout `b3c1896`):
+all 4,000 cot/train clean prompts convert (0 skipped without choices, 0
+duplicates) → 16,000 parquet rows; option counts per question 2/3/4/5 =
+393/125/3348/134; prompt token lengths under the Qwen3-8B chat template
+p50=139, p95=221, p99=288, max=685 — comfortably inside
+`data.max_prompt_length: 4096` (1,024 would also fit, a packing-efficiency
+lever for the smoke).
+
+## Phase 4 arms → config
+
+| Arm | Overrides on top of the defaults |
+| --- | --- |
+| VDCT-full (headline) | none |
+| λ=0 (no proper scoring) | `vdct.lambda_log_score=0.0` |
+| Proper-scoring-only (no consistency) | `vdct.consistency_weight=0.0` |
+| Control | dataset built with `--control` (reference prompt on both variants) |
+| RMCT baseline | `../rmct_verl/` recipe on the same pairs JSONL, its own hyperparameters |
+
 ## Launch
 
 Environment exactly as `../rmct_verl/README.md` §Launch (same pinned verl
@@ -116,6 +142,20 @@ with both recipe roots exposed and no LoRA (VDCT default is full-parameter
 on a dense model — Qwen3-8B pending Phase 1 confirmation; the reference
 forward runs in a separate worker, handled by `main_vdct`'s role-mapping
 fix):
+
+Preflight every launch line first — it composes the exact config the run
+would use and fails on typo'd overrides, renamed verl keys, or misaligned
+batch arithmetic:
+
+```bash
+python experiments/vdct_verl/scripts/resolve_config.py --verl-dir "${VERL_DIR}" \
+    data.train_batch_size=64 vdct.lambda_log_score=1.0   # + the rest of the launch line
+```
+
+(Caution for local dev: `pip install -e "${VERL_DIR}" --no-deps` into the CTM
+venv shadows this repo's top-level `scripts` package with verl's and breaks
+`tests/irpan_2510_27062` collection — keep the verl install in the pod env,
+as the smoke notes already do.)
 
 ```bash
 export PYTHONPATH="${CTM_DIR}/experiments/vdct_verl:${CTM_DIR}/experiments/rmct_verl:${PYTHONPATH:-}"
@@ -128,7 +168,6 @@ python3 -m recipe.vdct.main_vdct \
     data.train_files=/workspace/vdct/data/vdct_rows.parquet \
     data.val_files=/workspace/vdct/data/vdct_rows.parquet \
     data.train_batch_size=64 \
-    data.max_prompt_length=4096 \
     data.max_response_length=8192 \
     data.filter_overlong_prompts=True \
     data.truncation=error \
@@ -170,12 +209,26 @@ Two evaluation tracks, both untouched by this recipe:
    in-tree runner, exactly as for RMCT.
 2. **The AttCT repo's three-way sycophancy split** (for comparability with
    the Transformer-Stack paper, per the 2026-08-22 dataset decision), run
-   through that repo's `run_evals.py` on the exported HF checkpoint:
-   held-out bias BRR (Chua-suite held-out bias types), bias-on-MMLU BRR,
-   and the Anthropic model-written-evals sycophancy rate (n=999, 50% = no
-   sycophancy). Pre-training comparators for the shared models are that
-   paper's Table 11 — for Qwen3-8B (this recipe's default): bias-on-MMLU
-   BRR 0.198, held-out BRR 0.309, MWE syc. rate 0.877, MMLU acc. 0.740.
+   from the AttCT checkout root on the exported/merged HF checkpoint.
+   Command shape (their CLI, verified against checkout `b3c1896`; pin the
+   exact flag values during Phase 5):
+
+   ```bash
+   # Held-out-bias BRR + bias-on-MMLU + the repo's own sycophancy resistance
+   python run_evals.py --model <merged-hf-checkpoint> \
+       --skip-clearharm --skip-persona --skip-mtbench \
+       --n-mmlu 500 \
+       --brr-test-root <cot-transparency test root> \
+       --brr-baseline-json <untrained-model BRR json>   # ratio vs Table 11 base
+
+   # Anthropic model-written-evals sycophancy rate (n=999, 50% = none):
+   # experiments/sycophancy/evaluate_sycophancy.py with anthropic_eval=True
+   # (its _load_anthropic_questions(n=1000) sampling is the paper's n=999).
+   ```
+
+   Pre-training comparators for the shared models are that paper's Table 11
+   — for Qwen3-8B (this recipe's default): bias-on-MMLU BRR 0.198, held-out
+   BRR 0.309, MWE syc. rate 0.877, MMLU acc. 0.740.
 
 ## Deviations from the plan document
 

@@ -28,8 +28,12 @@ from recipe.vdct.vdct_core import (
     log_score,
     mean_distribution,
     merge_dump_fields,
+    rows_from_records,
     total_variation,
     worst_case_reward,
+)
+from recipe.vdct.vdct_core import (
+    mean_side_distributions as compute_side_means,
 )
 from slime_port.advantages import normalize_advantages, normalize_grouped
 
@@ -269,6 +273,31 @@ def test_missing_answer_samples_omit_log_score_term():
     assert result.metrics["vdct/sides_missing_answer_samples"] == 1.0
 
 
+def test_consistency_weight_zero_is_the_proper_scoring_only_arm():
+    """w_c = 0 (Phase 4 arm 3): the training side keeps only the log score."""
+    rows = [
+        dist_row(TRAINING_VARIANT, (0.2, 0.7, 0.1)),
+        dist_row(REFERENCE_VARIANT, (0.5, 0.3, 0.2)),
+        answer_row(TRAINING_VARIANT, 1),
+        answer_row(REFERENCE_VARIANT, 0),
+    ]
+    config = VDCTConfig(consistency_weight=0.0)
+    result = compute_row_advantages(rows, config)
+    assert result.rewards[0] == pytest.approx(log_score((0.2, 0.7, 0.1), [1], config.epsilon), abs=APPROX)
+    assert result.rewards[1] == pytest.approx(log_score((0.5, 0.3, 0.2), [0], config.epsilon), abs=APPROX)
+    # Worst case scales with the terms that exist: no JS component at w_c=0.
+    assert worst_case_reward(config) == pytest.approx(math.log(config.epsilon), abs=APPROX)
+
+
+def test_consistency_weight_scales_the_js_term():
+    rows = [
+        dist_row(TRAINING_VARIANT, (0.2, 0.7, 0.1)),
+        dist_row(REFERENCE_VARIANT, (0.5, 0.3, 0.2)),
+    ]
+    result = compute_row_advantages(rows, VDCTConfig(lambda_log_score=0.0, consistency_weight=0.5))
+    assert result.rewards[0] == pytest.approx(-0.5 * js_divergence((0.2, 0.7, 0.1), [0.5, 0.3, 0.2]), abs=APPROX)
+
+
 def test_lambda_zero_drops_the_proper_scoring_term():
     rows = [
         dist_row(TRAINING_VARIANT, (0.2, 0.7, 0.1)),
@@ -369,6 +398,33 @@ def test_dump_columns_align_with_rows():
     assert columns["skip_reason"] == result.skip_reasons
     # Every row carries its group's target, answer rows included.
     assert columns["q_ref_target"] == [result.q_ref_target["g0"]] * 3
+
+
+def test_mean_side_distributions_and_record_round_trip():
+    rows = [
+        dist_row(REFERENCE_VARIANT, (0.6, 0.4)),
+        dist_row(REFERENCE_VARIANT, (0.4, 0.6)),
+        dist_row(REFERENCE_VARIANT, None, parse_ok=False),
+        dist_row(TRAINING_VARIANT, (0.2, 0.8)),
+        answer_row(TRAINING_VARIANT, 1),
+    ]
+    means = compute_side_means(rows)
+    assert means["g0"][REFERENCE_VARIANT] == pytest.approx([0.5, 0.5], abs=APPROX)
+    assert means["g0"][TRAINING_VARIANT] == pytest.approx([0.2, 0.8], abs=APPROX)
+
+    # rows_from_records rebuilds the same view from dict records (dump rows).
+    records = [
+        {
+            "group_id": row.group_id,
+            "variant": row.variant,
+            "kind": row.kind,
+            "parse_ok": row.parse_ok,
+            "option_distribution": list(row.option_distribution) if row.option_distribution else None,
+            "answer_index": row.answer_index,
+        }
+        for row in rows
+    ]
+    assert rows_from_records(records) == rows
 
 
 def test_merge_dump_fields():

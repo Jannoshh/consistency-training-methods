@@ -156,7 +156,13 @@ def test_row_advantages_match_slime_pipeline(seed, config):
 def test_row_advantages_invariant_to_row_order(seed):
     """balance_batch may reorder the batch; the per-row advantage must not move
     with it. (Only true because ``normalization='per_item'`` standardizes within
-    a group — the pooled mode is order-invariant too, being a batch statistic.)"""
+    a group — the pooled mode is order-invariant too, being a batch statistic.)
+
+    Unlike the Gate-A test above, this one permutes rows WITHIN groups, which
+    permutes the summation order inside the per-group standardization — the
+    property holds only up to float associativity, hence a last-ulp tolerance
+    instead of TOL's exact equality.
+    """
     rng = random.Random(seed)
     rows = make_rows(rng)
     config = AdvantageConfig()
@@ -168,7 +174,7 @@ def test_row_advantages_invariant_to_row_order(seed):
     other = compute_row_advantages(shuffled, config)
 
     for new_idx, old_idx in enumerate(permutation):
-        assert other.advantages[new_idx] == pytest.approx(base.advantages[old_idx], abs=TOL)
+        assert other.advantages[new_idx] == pytest.approx(base.advantages[old_idx], rel=1e-12, abs=1e-12)
         assert other.trainable[new_idx] == base.trainable[old_idx]
 
 

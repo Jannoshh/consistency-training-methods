@@ -43,7 +43,7 @@ from verl.utils.rollout_trace import rollout_trace_op
 from verl.workers.rollout.replica import TokenOutput
 
 from .vdct_core import ANSWER_KIND, DISTRIBUTION_KIND, REFERENCE_VARIANT, TRAINING_VARIANT
-from .vdct_elicitation import parse_option_distribution
+from .vdct_elicitation import SUM_TOLERANCE, parse_option_distribution
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
@@ -74,6 +74,9 @@ class VDCTAgentLoop(AgentLoopBase):
         super().__init__(*args, **kwargs)
         self.prompt_length = self.rollout_config.prompt_length
         self.response_length = self.rollout_config.response_length
+        # Parse strictness is reward policy (format compliance is trained), so
+        # it lives in the run's resolved config, not in library code.
+        self.parse_sum_tolerance = float(self.config.get("vdct", {}).get("parse_sum_tolerance", SUM_TOLERANCE))
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], priority: int = 0, **kwargs) -> AgentLoopOutput:
@@ -115,7 +118,7 @@ class VDCTAgentLoop(AgentLoopBase):
         answer_option: str | None = None
         answer_index: int | None = None
         if kind == DISTRIBUTION_KIND:
-            parsed = parse_option_distribution(text, option_labels)
+            parsed = parse_option_distribution(text, option_labels, sum_tolerance=self.parse_sum_tolerance)
             parse_ok = parsed is not None and not truncated
             option_distribution = parsed if parse_ok else None
         else:

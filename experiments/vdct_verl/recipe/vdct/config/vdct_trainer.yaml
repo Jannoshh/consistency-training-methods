@@ -24,8 +24,16 @@ vdct:
   # Proper-scoring weight lambda. Default 1.0; the Phase 3 smoke sweeps
   # {0.3, 1.0, 3.0}. 0.0 is the no-proper-scoring ablation arm.
   lambda_log_score: 1.0
+  # Weight on the training-side JS consistency term. 0.0 is the
+  # proper-scoring-only ablation arm.
+  consistency_weight: 1.0
   # Floor inside the log score and the worst-case (unparseable) reward.
   epsilon: 0.001
+  # Relative tolerance on the stated total when parsing distributions
+  # (unit-probability totals within 1 +/- tol, percent totals within
+  # 100 * (1 +/- tol)). A reward-policy knob: unparseable output gets the
+  # worst-case reward, so strictness shapes what is punished.
+  parse_sum_tolerance: 0.05
   # Advantage standardization over each (datapoint, side) 8-rollout
   # distribution population — slime_port.advantages.normalize_grouped
   # semantics. per_item | pooled.
@@ -60,6 +68,9 @@ data:
   prompt_key: prompt
   return_raw_chat: True
   shuffle: False
+  # Paired prompts plus the elicitation instruction are long; verl's 512
+  # default silently truncates them (caught by resolve_config.py).
+  max_prompt_length: 4096
   # Do not inherit RMCT's 20,480-token ceiling; distribution/answer responses
   # are far shorter. Start at 8,192 (plan), fix in the smoke.
   max_response_length: 8192
