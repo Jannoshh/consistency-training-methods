@@ -1,4 +1,4 @@
-"""Shared VDCT row vocabulary and JSONL reading.
+"""Shared VDCT row vocabulary, JSONL reading, and converter provenance helpers.
 
 Single owner of the strings that tie the dataset parquet, the agent loop, the
 trainer math, and the diagnostics together. Deliberately a zero-dependency
@@ -11,6 +11,7 @@ re-exports the vocabulary for its callers.
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -40,3 +41,17 @@ def read_jsonl_rows(path: str | Path, required: Iterable[str] = ()) -> list[dict
                 raise ValueError(f"{path}:{line_no}: row missing {sorted(missing)}")
             rows.append(row)
     return rows
+
+
+def git_head_sha(path: str | Path) -> str | None:
+    """HEAD commit of a checkout, for converter provenance; None if unavailable."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return result.stdout.strip() or None

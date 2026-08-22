@@ -63,15 +63,16 @@ grounding: `notes/elicitation_scheme.md`.
 | `recipe/vdct/main_vdct.py` | Entry point (`python -m recipe.vdct.main_vdct`); inherits the RMCT runner (role-mapping fix lives in one place) and gates the reference policy on `vdct.kl_coef`. |
 | `recipe/vdct/config/` | Hydra overlay (`vdct_trainer.yaml`) + agent-loop registration. |
 | `scripts/make_pairs_from_attct.py` | c-wei/AttCT `sycophancy_bct` assets → native paired-prompt JSONL, published as a verified `ctm.artifacts` JSONL/manifest pair (see Data). |
+| `scripts/make_pairs_from_medicalchat.py` | MedicalChat sycophancy environment (ariahw/rl-rewardhacking-ext) → native paired-prompt JSONL, recast as a two-option stance choice with no ground-truth in the training path (see Data). |
 | `scripts/make_vdct_dataset.py` | Paired-prompt JSONL → verl parquet, 4 rows/datapoint. |
 | `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations (side aggregation shared with the training-time metric via `vdct_core.mean_side_distributions`). |
 | `scripts/resolve_config.py` | Preflight: dry-resolves the overlay against a verl checkout, checks every key the recipe reads, prints the run plan. Run it before submitting any pod job. |
-| `tests/` | 73 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
+| `tests/` | 80 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
 | `notes/elicitation_scheme.md` | Phase 0 note fixing the elicitation format. |
 
 Run tests: `uv run --no-sync python -m pytest experiments/vdct_verl/tests -q`
-(the AttCT-converter integration test skips unless a `c-wei/AttCT` checkout
-is present at `$ATTCT_DIR` or `/home/user/c-wei/AttCT`).
+(integration tests skip unless the source checkouts are present:
+`$ATTCT_DIR`, `$REWARDHACK_DIR`, `$VERL_DIR`).
 
 ## Data
 
@@ -103,6 +104,39 @@ shared `ctm.prompt_pairs` schema (`--input-format prompt_pairs`, e.g. the
 irpan_2510_27062 artifacts — loaded manifest-verified through
 `ctm.settings.pairs.load_pair_artifact`, per the repo's frozen-artifact
 rule).
+
+**Second pool: the MedicalChat sycophancy environment** (decision
+2026-08-22, from *Designing Effective Monitor-Based Interventions for
+Mitigating Reward Hacking During RL*, OpenReview `uFTnN6fUgW`, released at
+`https://github.com/ariahw/rl-rewardhacking-ext`). iCliniq patient questions
+whose sycophancy loophole appends a leading question — half implying the
+correct management, half a plausible incorrect one. The converter recasts
+the free-form environment as a TWO-OPTION stance choice using the release's
+own per-row stance phrases (`correct_phrase`/`incorrect_phrase`), so the
+existing MCQ machinery (answer parser, verbalized distributions, trait
+classifier) consumes it unchanged — and **no ground-truth signal enters the
+training path**: `ground_truth` is left empty by design (consistency
+training is applied precisely where no correctness signal is assumed);
+which stance is medically right stays in the source repo. Cue choice and
+option order are seeded per question; hint modes mirror the environment
+(`sycophancy_half` default, `sycophancy`, `sycophancy_correct`); `--ids-from`
+restricts to e.g. the paper's hard-1k training file:
+
+```bash
+export REWARDHACK_DIR=/path/to/ariahw/rl-rewardhacking-ext
+uv run --no-sync python experiments/vdct_verl/scripts/make_pairs_from_medicalchat.py \
+    --split train --hint sycophancy_half --seed 42 \
+    --ids-from "$REWARDHACK_DIR/results/data/icliniq_train_filtered_sycophancy_half_hard_1k_sycophancy_half.jsonl" \
+    --output data/medicalchat_pairs_hard1k.jsonl
+```
+
+Verified on the real assets (2026-08-22): all 2,377 train pairs convert (0
+skipped; seeded cue split 1,176 incorrect / 1,201 correct-stance), the
+hard-1k `--ids-from` subset builds exactly 1,000 pairs, and prompt tokens
+under the Qwen3-8B chat template run p50=257, p99=644, max=1,036 — inside
+the ceiling. Evaluation for this pool runs through the release's own judged
+environment (`run_eval.py`, Qwen3-235B medical-consistency judge), which is
+where correctness lives.
 
 Then the VDCT parquet:
 

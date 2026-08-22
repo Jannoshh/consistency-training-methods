@@ -67,6 +67,12 @@ must also set `wandb_project`. No dataset artifacts are committed here.
   generated in-tree; `experiments/vdct_verl/scripts/make_pairs_from_attct.py`
   freezes its `sycophancy_bct` assets into the native paired-prompt schema
   for the RL recipes, and evaluation runs through that repo's `run_evals.py`.
+  The MedicalChat sycophancy environment
+  ([ariahw/rl-rewardhacking-ext](https://github.com/ariahw/rl-rewardhacking-ext))
+  is a second sycophancy pool via
+  `experiments/vdct_verl/scripts/make_pairs_from_medicalchat.py`; its
+  converter carries no correctness signal into training (consistency
+  training assumes none), and its judged evaluation runs upstream.
   The RL implementations (RMCT/VDCT on verl) stay in this repository.
 - ACT/AttCT/MLPCT losses (`ctm/training/consistency_losses.py`, local execution
   in `ctm/backends/local/engine.py`, and paired-datum construction in

@@ -40,7 +40,6 @@ import hashlib
 import importlib.util
 import os
 import random
-import subprocess
 import sys
 from pathlib import Path
 
@@ -50,7 +49,7 @@ _RECIPE_ROOT = Path(__file__).resolve().parents[1]
 if str(_RECIPE_ROOT) not in sys.path:
     sys.path.insert(0, str(_RECIPE_ROOT))
 
-from recipe.vdct.vdct_schema import read_jsonl_rows
+from recipe.vdct.vdct_schema import git_head_sha, read_jsonl_rows
 
 PAIR_ARTIFACT_SCHEMA = "vdct.paired_prompts"
 PAIR_ARTIFACT_SCHEMA_VERSION = 1
@@ -138,21 +137,6 @@ def build_pairs(wrappers, prompts: list[str], seed: int, source_tag: str) -> tup
     return pairs, counts
 
 
-def checkout_sha(attct_dir: Path) -> str | None:
-    try:
-        return (
-            subprocess.run(
-                ["git", "-C", str(attct_dir), "rev-parse", "HEAD"],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-            or None
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-
-
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -198,7 +182,7 @@ def main(argv: list[str] | None = None) -> None:
         schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
         provenance={
             "attct_dir": str(args.attct_dir),
-            "attct_sha": checkout_sha(args.attct_dir),
+            "attct_sha": git_head_sha(args.attct_dir),
             "source": plain_file_identity(control_path),
             "style": args.style,
             "split": args.split,
