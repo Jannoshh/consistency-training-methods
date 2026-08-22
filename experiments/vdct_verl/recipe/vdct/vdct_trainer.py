@@ -1,21 +1,28 @@
 """VDCT trainer for verl: a ``RayPPOTrainer`` with the advantage stage replaced.
 
 Follows ``recipe.rmct.rmct_trainer`` exactly in structure; see that module's
-docstring for the verl mechanics (why ``use_reference_policy`` is forced, DP
-awareness, why grouping uses the dataset ``group_id`` rather than verl's per
--row uid). What differs:
+docstring for the verl mechanics (DP awareness, why grouping uses the dataset
+``group_id`` rather than verl's per-row uid). What differs:
 
 - rewards/advantages come from ``vdct_core.compute_row_advantages`` (graded
   JS + log-score rewards over distribution rollouts, per-group
   standardization) instead of the RMCT rate-gap pipeline;
 - answer-kind rows are zero-masked alongside anything untrainable — they are
   outcome samples only;
-- ``_log_rollout_data`` is overridden to thread the VDCT per-row fields
-  (parsed distributions, answers, rewards, advantages, targets) into
+- ``use_reference_policy`` is forced on only when ``vdct.kl_coef`` is
+  nonzero: the reference forward exists solely for the KL term, and with the
+  term disabled it would be a wasted full forward per step (``main_vdct``
+  threads the same condition through worker registration);
+- ``_log_rollout_data`` is overridden to thread the VDCT per-row fields into
   ``reward_extra_infos_dict``, fixing for this recipe the inherited RMCT gap
-  where rollout dumps carried only verl's standard fields. In verl 2b0fe51's
-  ``fit()`` the dump runs after ``_update_actor`` on the same batch object,
-  so the computed per-row results stashed there are aligned and current.
+  where rollout dumps carried only verl's standard fields. The dump is
+  generic: ``_update_actor`` writes its computed columns
+  (``vdct_core.dump_columns``) into ``batch.non_tensor_batch``, and the
+  override then dumps every per-row non-tensor column not on a small
+  exclusion list — a new agent-loop ``extra_field`` or computed column
+  appears in dumps automatically. In verl 2b0fe51's ``fit()`` the dump runs
+  after ``_update_actor`` on the same batch object, so the computed columns
+  are aligned and current.
 
 The batch-centered KL term (tinker semantics) is reused from the RMCT recipe
 via ``vdct_core.centered_kl_penalty``.
@@ -30,24 +37,32 @@ import torch
 from verl import DataProto
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
-from .vdct_core import VDCTConfig, build_rows, centered_kl_penalty, compute_row_advantages, merge_dump_fields
+from .vdct_core import (
+    VDCTConfig,
+    build_rows,
+    centered_kl_penalty,
+    compute_row_advantages,
+    dump_columns,
+    merge_dump_fields,
+)
 
 logger = logging.getLogger(__name__)
 
-# Agent-loop extra_fields copied verbatim from the batch into the rollout dump.
-_DUMP_BATCH_FIELDS = (
-    "group_id",
-    "variant",
-    "kind",
-    "parse_ok",
-    "option_distribution",
-    "answer_option",
-    "answer_index",
-    "trait",
-    "option_labels",
-    "biased_option",
-    "response_truncated",
-)
+# Per-row non-tensor columns NOT copied into the rollout dump: bulky prompt
+# payloads already covered by the dump's own "input" column, and verl's
+# structured plumbing fields.
+_DUMP_EXCLUDED_COLUMNS = {
+    "raw_prompt",
+    "raw_prompt_ids",
+    "reward_model",
+    "extra_info",
+    "tools_kwargs",
+    "interaction_kwargs",
+    "multi_modal_data",
+    "multi_modal_inputs",
+    "turn_scores",
+    "tool_rewards",
+}
 
 
 def _vdct_config(vdct_cfg) -> VDCTConfig:
@@ -64,11 +79,14 @@ class RayVDCTTrainer(RayPPOTrainer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Must be set before init_workers(); the KL term targets the frozen
-        # base model even though both of verl's own KL switches are off.
-        self.use_reference_policy = True
         self.vdct_config = self.config.vdct
         self.vdct_math_config = _vdct_config(self.vdct_config)
+        self.vdct_kl_coef = float(self.vdct_config.get("kl_coef", 0.0))
+        # Must be set before init_workers(). The KL term targets the frozen
+        # base even though both of verl's own KL switches are off — but with
+        # the term disabled there is nothing to compute against, so skip the
+        # per-step reference forward entirely.
+        self.use_reference_policy = self.vdct_kl_coef != 0.0
         kl_source = self.vdct_config.get("kl_logprob_source", "old_log_probs")
         if kl_source not in ("old_log_probs", "rollout_log_probs"):
             raise ValueError(f"vdct.kl_logprob_source must be old_log_probs or rollout_log_probs, got {kl_source!r}")
@@ -78,24 +96,21 @@ class RayVDCTTrainer(RayPPOTrainer):
                 "VDCT owns the KL term; set algorithm.use_kl_in_reward=False and "
                 "actor_rollout_ref.actor.use_kl_loss=False (vdct.kl_coef controls the VDCT KL)."
             )
-        # Per-row results of the latest _update_actor, consumed by the
-        # rollout-dump override.
-        self._vdct_dump_fields: dict[str, list] | None = None
 
     def _update_actor(self, batch: DataProto) -> DataProto:
         rows = build_rows(batch.non_tensor_batch)
         result = compute_row_advantages(rows, self.vdct_math_config)
 
-        self._vdct_dump_fields = {
-            "vdct_reward": [float(r) for r in result.rewards],
-            "advantage": [float(a) for a in result.advantages],
-            "trainable": [bool(t) for t in result.trainable],
-            "skip_reason": list(result.skip_reasons),
-            "q_ref_target": [result.q_ref_target.get(row.group_id) for row in rows],
-        }
+        # Attach the computed per-row columns to the batch so the generic
+        # rollout dump carries them (np.empty keeps list-valued entries
+        # per-row instead of collapsing equal-length lists into a 2-D array).
+        for key, values in dump_columns(rows, result).items():
+            column = np.empty(len(values), dtype=object)
+            column[:] = values
+            batch.non_tensor_batch[key] = column
 
-        device = batch.batch["response_mask"].device
         response_mask = batch.batch["response_mask"]
+        device = response_mask.device
         trainable = torch.tensor(result.trainable, dtype=response_mask.dtype, device=device).unsqueeze(-1)
         # Zero the mask for every answer row, and (when the batch has no
         # signal) everything: those rows must contribute neither policy
@@ -106,12 +121,8 @@ class RayVDCTTrainer(RayPPOTrainer):
         batch.batch["response_mask"] = response_mask
 
         n_masked_tokens = int(response_mask.sum().item())
-        metrics = {k: float(v) for k, v in result.metrics.items()}
+        metrics = dict(result.metrics)
         metrics["vdct/masked_token_count"] = float(n_masked_tokens)
-        for reason in result.skip_reasons:
-            if reason is not None:
-                key = f"vdct/skip/{reason}"
-                metrics[key] = metrics.get(key, 0.0) + 1.0
 
         if n_masked_tokens == 0:
             # token-mean loss aggregation divides by the masked token count;
@@ -129,8 +140,7 @@ class RayVDCTTrainer(RayPPOTrainer):
         row_advantages = torch.tensor(result.advantages, dtype=torch.float32, device=device).unsqueeze(-1)
         advantages = row_advantages * response_mask.to(torch.float32)
 
-        kl_coef = float(self.vdct_config.get("kl_coef", 0.0))
-        if kl_coef != 0.0:
+        if self.vdct_kl_coef != 0.0:
             if self.vdct_kl_source not in batch.batch:
                 raise RuntimeError(
                     f"vdct.kl_coef != 0 but '{self.vdct_kl_source}' is not in the batch "
@@ -145,14 +155,14 @@ class RayVDCTTrainer(RayPPOTrainer):
                 batch.batch[self.vdct_kl_source].to(torch.float32),
                 batch.batch["ref_log_prob"].to(torch.float32),
                 response_mask,
-                kl_coef,
+                self.vdct_kl_coef,
             )
             advantages = advantages + penalty
             metrics["vdct/kl_policy_base"] = float(avg_diff.item())
-        metrics["vdct/kl_coef"] = kl_coef
+        metrics["vdct/kl_coef"] = self.vdct_kl_coef
 
         batch.batch["advantages"] = advantages
-        metrics["vdct/advantage_abs_mean"] = float((advantages.abs().sum() / max(n_masked_tokens, 1)).item())
+        metrics["vdct/advantage_abs_mean"] = float((advantages.abs().sum() / n_masked_tokens).item())
 
         actor_output = super()._update_actor(batch)
         actor_output.meta_info.setdefault("metrics", {}).update(metrics)
@@ -164,17 +174,15 @@ class RayVDCTTrainer(RayPPOTrainer):
         verl's dump writes only ``reward_extra_infos_dict`` columns (plus its
         standard fields); the agent loop's ``extra_fields`` land in
         ``non_tensor_batch`` and would otherwise be lost — the gap inherited
-        from the RMCT port. Merge both the raw loop fields and the computed
-        per-row results before delegating.
+        from the RMCT port. Copy every per-row non-tensor column (raw loop
+        fields and the computed columns ``_update_actor`` attached), minus
+        the exclusion list, before delegating.
         """
         n = len(batch)
-        fields: dict[str, list] = {}
-        for key in _DUMP_BATCH_FIELDS:
-            values = batch.non_tensor_batch.get(key)
-            if values is not None:
-                as_list = values.tolist() if isinstance(values, np.ndarray) else list(values)
-                fields[key] = as_list
-        if self._vdct_dump_fields is not None:
-            fields.update(self._vdct_dump_fields)
+        fields = {
+            key: values.tolist() if isinstance(values, np.ndarray) else list(values)
+            for key, values in batch.non_tensor_batch.items()
+            if key not in _DUMP_EXCLUDED_COLUMNS and len(values) == n
+        }
         merged = merge_dump_fields(reward_extra_infos_dict, fields, n)
         return super()._log_rollout_data(batch, merged, timing_raw, rollout_data_dir)

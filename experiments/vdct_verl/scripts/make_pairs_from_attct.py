@@ -26,8 +26,11 @@ mirroring ``_fill_template_placeholders``'s rendering exactly (prefix +
 prompt + suffix; ``{answer_rendered}`` = "(<letter>) <text>").
 
 Rows whose prompt has no extractable answer choices are skipped, matching the
-AttCT loader's behavior. A ``<output>.manifest.json`` records the checkout
-SHA, source file hash, seed, and counts for provenance.
+AttCT loader's behavior. The output is published through
+``ctm.artifacts.write_verified_jsonl_artifact`` — an immutable JSONL/manifest
+sidecar pair whose provenance records the checkout SHA, the source file
+identity, the seed, and the skip counts — so downstream tooling can verify it
+like any other frozen artifact in this repository.
 """
 
 from __future__ import annotations
@@ -35,12 +38,22 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
-import json
 import os
 import random
 import subprocess
+import sys
 from pathlib import Path
 
+from ctm.artifacts import artifact_manifest_path, plain_file_identity, write_verified_jsonl_artifact
+
+_RECIPE_ROOT = Path(__file__).resolve().parents[1]
+if str(_RECIPE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_RECIPE_ROOT))
+
+from recipe.vdct.vdct_schema import read_jsonl_rows
+
+PAIR_ARTIFACT_SCHEMA = "vdct.paired_prompts"
+PAIR_ARTIFACT_SCHEMA_VERSION = 1
 STYLES = ("cot", "non_cot")
 SPLITS = ("train", "eval")
 
@@ -60,18 +73,14 @@ def load_wrappers_module(attct_dir: Path):
 def read_clean_prompts(path: Path) -> list[str]:
     """The user-turn contents of a sycophancy_bct control JSONL."""
     prompts: list[str] = []
-    with path.open() as handle:
-        for line_no, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            messages = row.get("messages")
-            if not isinstance(messages, list) or not messages:
-                raise ValueError(f"{path}:{line_no}: row has no messages")
-            user_contents = [m["content"] for m in messages if m.get("role") == "user"]
-            if len(user_contents) != 1:
-                raise ValueError(f"{path}:{line_no}: expected exactly one user message")
-            prompts.append(str(user_contents[0]))
+    for line_no, row in enumerate(read_jsonl_rows(path, {"messages"}), 1):
+        messages = row["messages"]
+        if not isinstance(messages, list) or not messages:
+            raise ValueError(f"{path}:{line_no}: row has no messages")
+        user_contents = [m["content"] for m in messages if m.get("role") == "user"]
+        if len(user_contents) != 1:
+            raise ValueError(f"{path}:{line_no}: expected exactly one user message")
+        prompts.append(str(user_contents[0]))
     return prompts
 
 
@@ -162,7 +171,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.attct_dir is None:
         raise SystemExit("pass --attct-dir or set ATTCT_DIR to a c-wei/AttCT checkout")
-    if args.output.exists() and not args.force:
+    manifest_path = artifact_manifest_path(args.output)
+    if (args.output.exists() or manifest_path.exists()) and not args.force:
         raise SystemExit(f"{args.output} exists; pass --force to overwrite")
 
     wrappers = load_wrappers_module(args.attct_dir)
@@ -178,24 +188,25 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"need {args.n_datapoints} pairs, built {len(pairs)}")
         pairs = pairs[: args.n_datapoints]
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w") as handle:
-        for pair in pairs:
-            handle.write(json.dumps(pair, ensure_ascii=False) + "\n")
-
-    manifest = {
-        "attct_dir": str(args.attct_dir),
-        "attct_sha": checkout_sha(args.attct_dir),
-        "source_file": str(control_path),
-        "source_sha256": hashlib.sha256(control_path.read_bytes()).hexdigest(),
-        "style": args.style,
-        "split": args.split,
-        "seed": args.seed,
-        "n_pairs": len(pairs),
-        **counts,
-    }
-    manifest_path = args.output.with_suffix(args.output.suffix + ".manifest.json")
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    if args.force:
+        args.output.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+    write_verified_jsonl_artifact(
+        args.output,
+        pairs,
+        artifact_schema=PAIR_ARTIFACT_SCHEMA,
+        schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
+        provenance={
+            "attct_dir": str(args.attct_dir),
+            "attct_sha": checkout_sha(args.attct_dir),
+            "source": plain_file_identity(control_path),
+            "style": args.style,
+            "split": args.split,
+            "seed": args.seed,
+            **counts,
+        },
+        nonempty=True,
+    )
 
     print(f"wrote {len(pairs)} pairs -> {args.output}")
     print(f"  manifest -> {manifest_path}")

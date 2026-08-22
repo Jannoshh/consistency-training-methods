@@ -85,6 +85,8 @@ if str(_RMCT_ROOT) not in sys.path:
 from recipe.rmct.rmct_core import centered_kl_penalty  # re-export; bootstraps slime_port
 from slime_port.advantages import normalize_grouped
 
+from .vdct_schema import ANSWER_KIND, DISTRIBUTION_KIND, REFERENCE_VARIANT, TRAINING_VARIANT
+
 __all__ = [
     "ANSWER_KIND",
     "DISTRIBUTION_KIND",
@@ -97,6 +99,7 @@ __all__ = [
     "build_rows",
     "centered_kl_penalty",
     "compute_row_advantages",
+    "dump_columns",
     "entropy",
     "js_divergence",
     "log_score",
@@ -105,11 +108,6 @@ __all__ = [
     "total_variation",
     "worst_case_reward",
 ]
-
-REFERENCE_VARIANT = "reference"
-TRAINING_VARIANT = "training"
-DISTRIBUTION_KIND = "distribution"
-ANSWER_KIND = "answer"
 
 # JS divergence in nats is bounded by ln 2; the log-score term uses natural
 # logs too, so the two reward terms share one scale.
@@ -319,10 +317,7 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
             tv_sum += total_variation(mean_distribution(parsed_train_dists), target)
             tv_n += 1
 
-        for variant, consistency_target in (
-            (REFERENCE_VARIANT, None),  # no anchor term (see module docstring)
-            (TRAINING_VARIANT, target),
-        ):
+        for variant in (REFERENCE_VARIANT, TRAINING_VARIANT):
             side_rows = dist_rows[variant]
             if not side_rows:
                 continue
@@ -345,8 +340,10 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
                 else:
                     q = row.option_distribution
                     reward = 0.0
-                    if consistency_target is not None:
-                        js = js_divergence(q, consistency_target)
+                    # Only the training side has a consistency term — the
+                    # reference side has no anchor (see module docstring).
+                    if variant == TRAINING_VARIANT:
+                        js = js_divergence(q, target)
                         reward -= js
                         js_train[0] += js
                         js_train[1] += 1
@@ -398,6 +395,10 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
         "vdct/sides_missing_answer_samples": float(n_sides_missing_answers),
         "vdct/lambda_log_score": config.lambda_log_score,
     }
+    for reason in skip_reasons:
+        if reason is not None:
+            key = f"vdct/skip/{reason}"
+            metrics[key] = metrics.get(key, 0.0) + 1.0
 
     return VDCTBatchResult(
         rewards=rewards,
@@ -413,6 +414,22 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
 # ── verl-batch adapters (kept here so they stay CPU-testable) ────────────────
 
 REQUIRED_ROW_FIELDS = ("group_id", "variant", "kind", "parse_ok")
+
+
+def dump_columns(rows: list[VDCTRow], result: VDCTBatchResult) -> dict[str, list]:
+    """Per-row computed columns for the rollout dump, aligned with ``rows``.
+
+    The trainer writes these into the batch's non-tensor columns right after
+    computing them, so the dump stage picks them up generically alongside the
+    agent loop's raw fields — no trainer-held state, no hand-curated list.
+    """
+    return {
+        "vdct_reward": list(result.rewards),
+        "advantage": list(result.advantages),
+        "trainable": list(result.trainable),
+        "skip_reason": list(result.skip_reasons),
+        "q_ref_target": [result.q_ref_target.get(row.group_id) for row in rows],
+    }
 
 
 def build_rows(non_tensor_batch: dict) -> list[VDCTRow]:

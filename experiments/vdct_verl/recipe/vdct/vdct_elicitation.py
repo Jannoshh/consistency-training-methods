@@ -20,7 +20,8 @@ DISTRIBUTION_CLOSE = "</distribution>"
 # 1 ± SUM_TOLERANCE, percentage totals in 100 * (1 ± SUM_TOLERANCE).
 SUM_TOLERANCE = 0.05
 # Post-parse floor applied after renormalization (renormalize -> floor ->
-# renormalize). Matches the reward-side epsilon default.
+# renormalize). Independent robustness: the reward-side log_score applies its
+# own vdct.epsilon floor, so this need not track the config.
 PROBABILITY_FLOOR = 1e-3
 
 _LINE_RE = re.compile(r"^\s*([A-Za-z0-9]+)\s*[:=]\s*([0-9]*\.?[0-9]+)\s*(%?)\s*$")
@@ -56,12 +57,7 @@ def _last_block(text: str) -> str | None:
     return text[start + len(DISTRIBUTION_OPEN) : end]
 
 
-def parse_option_distribution(
-    text: str,
-    option_labels: list[str],
-    sum_tolerance: float = SUM_TOLERANCE,
-    floor: float = PROBABILITY_FLOOR,
-) -> list[float] | None:
+def parse_option_distribution(text: str, option_labels: list[str]) -> list[float] | None:
     """Parse the stated distribution, dense in ``option_labels`` order.
 
     Strict by design (format compliance is itself trained): returns None
@@ -69,10 +65,12 @@ def parse_option_distribution(
     exactly once and nothing else, each line ``LABEL: value`` with a
     non-negative number. Values may be unit probabilities (total ~1) or
     percentages (total ~100, ``%`` suffixes allowed); the scale is decided
-    from the total, within ``sum_tolerance`` relative tolerance. On success
-    the vector is renormalized to sum 1, floored at ``floor``, and
-    renormalized once more, so every entry is strictly positive and the
-    result is a proper distribution.
+    from the total, within ``SUM_TOLERANCE`` relative tolerance. On success
+    the vector is renormalized to sum 1, floored at ``PROBABILITY_FLOOR``,
+    and renormalized once more, so every entry is strictly positive and the
+    result is a proper distribution. (The reward-side ``log_score`` applies
+    its own ``vdct.epsilon`` floor, so the parse floor is independent
+    robustness, not a value that must track the config.)
     """
     if not option_labels:
         raise ValueError("option_labels must be non-empty")
@@ -99,22 +97,15 @@ def parse_option_distribution(
         return None
 
     total = sum(values.values())
-    if abs(total - 1.0) <= sum_tolerance:
-        scale = 1.0
+    if abs(total - 1.0) <= SUM_TOLERANCE:
         if saw_percent_sign:
             return None  # "%": the numbers claim percent but total ~1 — ambiguous
-    elif abs(total - 100.0) <= 100.0 * sum_tolerance:
-        scale = 100.0
-    else:
+    elif not abs(total - 100.0) <= 100.0 * SUM_TOLERANCE:
         return None
 
-    dense = [values[label] / scale for label in option_labels]
-    if any(v < 0.0 for v in dense):
-        return None
-    if any(v > 1.0 + sum_tolerance for v in dense):
-        return None
-
-    normalized = [v / (total / scale) for v in dense]
-    floored = [max(v, floor) for v in normalized]
+    # _LINE_RE admits no sign, so every value is non-negative, and the total
+    # check bounds each entry by total/scale — no per-entry range check needed.
+    normalized = [values[label] / total for label in option_labels]
+    floored = [max(v, PROBABILITY_FLOOR) for v in normalized]
     floored_total = sum(floored)
     return [v / floored_total for v in floored]

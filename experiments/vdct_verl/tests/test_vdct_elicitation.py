@@ -1,14 +1,6 @@
 """Tests for the strict verbalized-distribution parser, including malformed cases."""
 
-import sys
-from pathlib import Path
-
 import pytest
-
-_VDCT_VERL = Path(__file__).resolve().parents[1]
-if str(_VDCT_VERL) not in sys.path:
-    sys.path.insert(0, str(_VDCT_VERL))
-
 from recipe.vdct.vdct_elicitation import (
     DISTRIBUTION_CLOSE,
     DISTRIBUTION_OPEN,

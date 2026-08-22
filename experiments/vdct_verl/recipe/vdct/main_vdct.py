@@ -1,12 +1,13 @@
 """VDCT entry point: ``python -m recipe.vdct.main_vdct <hydra overrides>``.
 
-Structural copy of ``recipe.rmct.main_rmct`` (see that module's docstring for
-the V0/V1 split and why ``BaseTaskRunner.run`` is replicated rather than
-subclassed): built on ``verl.trainer.main_ppo_v0.BaseTaskRunner``, pins
-``trainer.use_v1=False``, forces ``use_reference_policy=True`` through
-``validate_config``, and carries the non-LoRA role-mapping fix — which VDCT
-exercises by default, since the runs are full-parameter (no LoRA, so no
-``ref_in_actor``; the reference forward runs in a separate worker).
+Built on the RMCT runner (see ``recipe.rmct.main_rmct``'s docstring for the
+V0/V1 split and why ``BaseTaskRunner.run`` is replicated rather than
+subclassed): ``VDCTTaskRunner`` inherits ``RMCTTaskRunner``'s non-LoRA
+role-mapping fix — the verl-version-specific re-keying lives in one place —
+and replaces only ``run()`` (different trainer class) plus the
+reference-policy decision: VDCT runs the reference forward only when
+``vdct.kl_coef`` is nonzero, since the forward exists solely for the KL term
+(``RayVDCTTrainer.__init__`` applies the same condition).
 """
 
 import os
@@ -22,29 +23,30 @@ from verl.trainer.ppo.utils import create_rl_dataset, create_rl_sampler, need_cr
 from verl.utils.config import validate_config
 from verl.utils.device import auto_set_device
 
+from . import vdct_core
 
-class VDCTTaskRunner(BaseTaskRunner):
-    """TaskRunner that builds a ``RayVDCTTrainer``."""
+# Importing vdct_core installs the recipe.rmct sys.path entry; the assert is
+# an import-sorter barrier keeping the RMCT-runner import below the bootstrap.
+assert vdct_core
+from recipe.rmct.main_rmct import RMCTTaskRunner
+
+
+def _uses_reference_policy(config) -> bool:
+    """The reference forward exists only for the VDCT KL term."""
+    return float(config.vdct.get("kl_coef", 0.0)) != 0.0
+
+
+class VDCTTaskRunner(RMCTTaskRunner):
+    """RMCTTaskRunner with the VDCT trainer and a conditional reference policy."""
 
     def add_actor_rollout_worker(self, config):
-        # BaseTaskRunner picks the fused ActorRolloutRef role only when
-        # need_reference_policy(config) is true, which reads verl's two KL
-        # switches — both off for VDCT (the trainer owns the KL term). Without
-        # LoRA (ref_in_actor) that would register the worker under
-        # Role.ActorRollout while init_workers, seeing our forced
-        # use_reference_policy, asserts on Role.ActorRolloutRef. Re-key it.
-        cls, wg_cls = super().add_actor_rollout_worker(config)
-        from verl.trainer.ppo.ray_trainer import Role
-
-        if Role.ActorRollout in self.role_worker_mapping:
-            lora_rank = config.actor_rollout_ref.model.get("lora", {}).get("rank", 0)
-            if lora_rank <= 0:
-                lora_rank = config.actor_rollout_ref.model.get("lora_rank", 0)
-            ref_in_actor = lora_rank > 0 or config.actor_rollout_ref.model.get("lora_adapter_path") is not None
-            if not ref_in_actor:
-                self.role_worker_mapping[Role.ActorRolloutRef] = self.role_worker_mapping.pop(Role.ActorRollout)
-                self.mapping[Role.ActorRolloutRef] = self.mapping.pop(Role.ActorRollout)
-        return cls, wg_cls
+        if _uses_reference_policy(config):
+            # Inherit RMCT's re-keying to Role.ActorRolloutRef (needed because
+            # both of verl's own KL switches are off while the trainer still
+            # forces the reference forward).
+            return super().add_actor_rollout_worker(config)
+        # No reference forward: verl's stock registration is already right.
+        return BaseTaskRunner.add_actor_rollout_worker(self, config)
 
     def run(self, config):
         from pprint import pprint
@@ -61,9 +63,7 @@ class VDCTTaskRunner(BaseTaskRunner):
 
         validate_config(
             config=config,
-            # VDCT always needs the reference forward, even though both of
-            # verl's own KL switches are off. See RayVDCTTrainer.__init__.
-            use_reference_policy=True,
+            use_reference_policy=_uses_reference_policy(config),
             use_critic=need_critic(config),
         )
 

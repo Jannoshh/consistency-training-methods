@@ -50,23 +50,14 @@ from recipe.vdct.vdct_core import (
     mean_distribution,
     total_variation,
 )
+from recipe.vdct.vdct_schema import read_jsonl_rows
 
 N_BINS = 10
+REQUIRED_KEYS = ("group_id", "variant", "kind", "parse_ok", "option_labels")
 
 
 def read_rows(paths: list[Path]) -> list[dict]:
-    rows: list[dict] = []
-    for path in paths:
-        with path.open() as handle:
-            for line_no, line in enumerate(handle, 1):
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                for key in ("group_id", "variant", "kind", "parse_ok", "option_labels"):
-                    if key not in row:
-                        raise ValueError(f"{path}:{line_no}: row missing {key!r}")
-                rows.append(row)
-    return rows
+    return [row for path in paths for row in read_jsonl_rows(path, REQUIRED_KEYS)]
 
 
 def collect_sides(rows: list[dict]) -> dict[tuple[str, str], dict]:
@@ -125,9 +116,9 @@ def calibration_report(sides: dict[tuple[str, str], dict]) -> dict:
         pairs.extend(zip(stated, empirical))
         tv_values.append(total_variation(stated, empirical))
     if not pairs:
-        return {"n_sides": 0, "n_sides_skipped": skipped}
+        return {"n_sides_scored": 0, "n_sides_skipped": skipped}
     return {
-        "n_sides": len(tv_values),
+        "n_sides_scored": len(tv_values),
         "n_sides_skipped": skipped,
         "ece": expected_calibration_error(pairs),
         "tv_stated_vs_empirical_mean": sum(tv_values) / len(tv_values),
@@ -149,7 +140,6 @@ def cue_invariance_report(sides: dict[tuple[str, str], dict]) -> dict:
     tv_values: list[float] = []
     biased_shares: list[float] = []
     n_largest_shift_on_cued = 0
-    n_with_cue_info = 0
     for group_id in {g for g, _ in sides}:
         reference = sides.get((group_id, REFERENCE_VARIANT))
         training = sides.get((group_id, TRAINING_VARIANT))
@@ -162,7 +152,6 @@ def cue_invariance_report(sides: dict[tuple[str, str], dict]) -> dict:
         biased = training["biased_option"]
         if biased is None or biased not in labels:
             continue
-        n_with_cue_info += 1
         deltas = [abs(t - r) for t, r in zip(mean_train, mean_ref)]
         total_shift = sum(deltas)
         biased_idx = labels.index(biased)
@@ -176,7 +165,7 @@ def cue_invariance_report(sides: dict[tuple[str, str], dict]) -> dict:
     if biased_shares:
         report.update(
             {
-                "n_groups_with_cue_info": n_with_cue_info,
+                "n_groups_with_cue_info": len(biased_shares),
                 "biased_option_shift_share_mean": sum(biased_shares) / len(biased_shares),
                 "largest_shift_on_cued_frac": n_largest_shift_on_cued / len(biased_shares),
             }

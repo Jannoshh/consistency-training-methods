@@ -9,16 +9,9 @@ Run: uv run --no-sync python -m pytest experiments/vdct_verl/tests -q
 """
 
 import math
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
-
-_VDCT_VERL = Path(__file__).resolve().parents[1]
-if str(_VDCT_VERL) not in sys.path:
-    sys.path.insert(0, str(_VDCT_VERL))
-
 from recipe.vdct.vdct_core import (
     ANSWER_KIND,
     DISTRIBUTION_KIND,
@@ -29,6 +22,7 @@ from recipe.vdct.vdct_core import (
     VDCTRow,
     build_rows,
     compute_row_advantages,
+    dump_columns,
     entropy,
     js_divergence,
     log_score,
@@ -242,6 +236,9 @@ def test_all_reference_unparsed_drops_the_training_side():
     assert not result.trainable[1]
     assert result.advantages[1] == 0.0
     assert result.skip_reasons[1] == "no_reference_target"
+    # Skip counters are core-owned metrics (one per skipped row).
+    assert result.metrics["vdct/skip/no_reference_target"] == 1.0
+    assert result.metrics["vdct/skip/answer_row"] == 1.0
 
 
 def test_reference_side_has_no_consistency_term():
@@ -326,7 +323,7 @@ def test_row_order_invariance():
 
 def test_unknown_variant_and_kind_are_rejected():
     with pytest.raises(ValueError, match="unknown variant"):
-        compute_row_advantages([VDCTRow("g0", "anchor", DISTRIBUTION_KIND, True, (1.0,))])
+        compute_row_advantages([VDCTRow("g0", "bogus", DISTRIBUTION_KIND, True, (1.0,))])
     with pytest.raises(ValueError, match="unknown kind"):
         compute_row_advantages([VDCTRow("g0", REFERENCE_VARIANT, "logits", True, (1.0,))])
 
@@ -349,13 +346,29 @@ def test_build_rows_from_object_arrays():
         "answer_index": np.array([None, None], dtype=object),
     }
     rows = build_rows(non_tensor)
-    assert rows[0] == VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, (0.5, 0.5), None)
+    assert rows[0] == VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, (0.5, 0.5))
     assert rows[1].kind == ANSWER_KIND and rows[1].option_distribution is None
 
 
 def test_build_rows_requires_vdct_fields():
     with pytest.raises(KeyError, match="missing VDCT fields"):
         build_rows({"group_id": ["g0"], "variant": [REFERENCE_VARIANT]})
+
+
+def test_dump_columns_align_with_rows():
+    rows = [
+        dist_row(REFERENCE_VARIANT, (0.6, 0.4, 0.0)[:3]),
+        dist_row(TRAINING_VARIANT, (0.2, 0.7, 0.1)),
+        answer_row(TRAINING_VARIANT, 1),
+    ]
+    result = compute_row_advantages(rows)
+    columns = dump_columns(rows, result)
+    assert columns["vdct_reward"] == result.rewards
+    assert columns["advantage"] == result.advantages
+    assert columns["trainable"] == result.trainable
+    assert columns["skip_reason"] == result.skip_reasons
+    # Every row carries its group's target, answer rows included.
+    assert columns["q_ref_target"] == [result.q_ref_target["g0"]] * 3
 
 
 def test_merge_dump_fields():

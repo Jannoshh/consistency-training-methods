@@ -7,11 +7,15 @@ Input 1 — the paired-prompt artifact, in either supported schema
 - ``native`` (default): native mcq-bias rows with at least ``question_id``,
   ``unbiased_messages``, ``biased_messages``, ``biased_option`` and
   ``option_labels`` (the parser contract);
-- ``prompt_pairs``: the shared ``ctm.prompt_pairs`` schema produced by
-  ``python -m ctm_data.adapters.mcq_bias.materialize --output-format
-  prompt_pairs`` — e.g. the sycophancy_bct training-pairs artifact the
-  irpan_2510_27062 reproduction consumes. Fields are mapped onto the native
-  view (``source_id``→``question_id``, ``reference_messages``→
+- ``prompt_pairs``: a verified ``ctm.prompt_pairs`` artifact (JSONL +
+  manifest sidecar) produced by ``python -m
+  ctm_data.adapters.mcq_bias.materialize --output-format prompt_pairs`` —
+  e.g. the sycophancy_bct training-pairs artifact the irpan_2510_27062
+  reproduction consumes. Loaded through
+  ``ctm.settings.pairs.load_pair_artifact``, so the manifest's schema
+  version, row count, and content hash are enforced (the repo's
+  frozen-artifact rule); fields are then mapped onto the native view
+  (``source_id``→``question_id``, ``reference_messages``→
   ``unbiased_messages``, ``variant_messages``→``biased_messages``,
   ``metadata.valid_labels``→``option_labels``, etc.).
 
@@ -48,7 +52,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import json
 import sys
 from pathlib import Path
 
@@ -59,34 +62,24 @@ if str(_RECIPE_ROOT) not in sys.path:
     sys.path.insert(0, str(_RECIPE_ROOT))
 
 from recipe.vdct.vdct_elicitation import elicitation_instruction
+from recipe.vdct.vdct_schema import (
+    ANSWER_KIND,
+    DISTRIBUTION_KIND,
+    REFERENCE_VARIANT,
+    TRAINING_VARIANT,
+    read_jsonl_rows,
+)
 
 REQUIRED = {"question_id", "unbiased_messages", "biased_messages", "biased_option", "option_labels"}
-PAIR_REQUIRED = {"source_id", "reference_messages", "variant_messages", "metadata"}
 PAIR_METADATA_REQUIRED = {"biased_option", "valid_labels"}
 INPUT_FORMATS = ("native", "prompt_pairs")
-REFERENCE_VARIANT = "reference"
-TRAINING_VARIANT = "training"
-DISTRIBUTION_KIND = "distribution"
-ANSWER_KIND = "answer"
-
-
-def _read_jsonl(path: Path, required: set[str]) -> list[dict]:
-    rows: list[dict] = []
-    with path.open() as handle:
-        for line_no, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            missing = required - row.keys()
-            if missing:
-                raise ValueError(f"{path}:{line_no}: row missing {sorted(missing)}")
-            rows.append(row)
-    return rows
 
 
 def _pair_row_to_native(row: dict, path: Path, line_no: int) -> dict:
     """Map one ``ctm.prompt_pairs`` row onto the native mcq-bias view."""
-    metadata = row["metadata"]
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict):
+        raise TypeError(f"{path}:{line_no}: prompt_pairs row has no metadata mapping")
     missing = PAIR_METADATA_REQUIRED - metadata.keys()
     if missing:
         raise ValueError(f"{path}:{line_no}: prompt_pairs metadata missing {sorted(missing)}")
@@ -104,18 +97,21 @@ def _pair_row_to_native(row: dict, path: Path, line_no: int) -> dict:
 
 def load_rows(path: Path, n_datapoints: int | None, input_format: str = "native") -> list[dict]:
     if input_format == "native":
-        rows = _read_jsonl(path, REQUIRED)
-    elif input_format == "prompt_pairs":
-        rows = [
-            _pair_row_to_native(row, path, line_no) for line_no, row in enumerate(_read_jsonl(path, PAIR_REQUIRED), 1)
-        ]
-    else:
-        raise ValueError(f"unknown input format {input_format!r}; expected one of {INPUT_FORMATS}")
-    if n_datapoints is not None:
-        if len(rows) < n_datapoints:
-            raise ValueError(f"need {n_datapoints} datapoints, {path} has {len(rows)}")
-        rows = rows[:n_datapoints]
-    return rows
+        rows = read_jsonl_rows(path, REQUIRED)
+        if n_datapoints is not None:
+            if len(rows) < n_datapoints:
+                raise ValueError(f"need {n_datapoints} datapoints, {path} has {len(rows)}")
+            rows = rows[:n_datapoints]
+        return rows
+    if input_format == "prompt_pairs":
+        # Manifest-verified load (schema version, row count, content hash,
+        # canonical pair shape, unique pair_id) — the repo's frozen-artifact
+        # rule. Prefix selection happens inside the loader.
+        from ctm.settings.pairs import load_pair_artifact
+
+        pair_rows, _manifest = load_pair_artifact(path, n_datapoints=n_datapoints)
+        return [_pair_row_to_native(row, path, line_no) for line_no, row in enumerate(pair_rows, 1)]
+    raise ValueError(f"unknown input format {input_format!r}; expected one of {INPUT_FORMATS}")
 
 
 def with_elicitation(messages: list[dict], option_labels: list[str]) -> list[dict]:
@@ -186,15 +182,13 @@ def main(argv: list[str] | None = None) -> None:
 
     rows = load_rows(args.input, args.n_datapoints, args.input_format)
     records = build_records(rows, args.data_source, args.control)
-    assert len(records) == 4 * len(rows)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(records).to_parquet(args.output, index=False)
 
-    n_datapoints = len(rows)
-    print(f"wrote {len(records)} rows ({n_datapoints} datapoints x 2 variants x 2 kinds) -> {args.output}")
+    print(f"wrote {len(records)} rows ({len(rows)} datapoints x 2 variants x 2 kinds) -> {args.output}")
     print("  data.train_batch_size = 4 * datapoints_per_step  (e.g. 64 for 16 datapoints/step)")
     print("  actor_rollout_ref.rollout.n = 8 (uniform; also fixes M = 8 answer samples per side)")
-    print(f"  one epoch = {4 * n_datapoints} rows")
+    print(f"  one epoch = {4 * len(rows)} rows")
 
 
 if __name__ == "__main__":

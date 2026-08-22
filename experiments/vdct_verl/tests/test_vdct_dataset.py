@@ -1,23 +1,15 @@
 """Tests for the VDCT parquet builder: schema, row structure, control mode,
 frozen-artifact refusals, and both input formats."""
 
-import importlib.util
-import json
-import sys
-from pathlib import Path
-
 import pandas as pd
 import pytest
-
-_VDCT_VERL = Path(__file__).resolve().parents[1]
-if str(_VDCT_VERL) not in sys.path:
-    sys.path.insert(0, str(_VDCT_VERL))
-
 from recipe.vdct.vdct_elicitation import DISTRIBUTION_OPEN
+from vdct_test_helpers import load_script, write_jsonl
 
-_SPEC = importlib.util.spec_from_file_location("make_vdct_dataset", _VDCT_VERL / "scripts" / "make_vdct_dataset.py")
-builder = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(builder)
+from ctm.artifacts import write_verified_jsonl_artifact
+from ctm.settings.pairs import PAIR_ARTIFACT_SCHEMA, PAIR_ARTIFACT_SCHEMA_VERSION
+
+builder = load_script("make_vdct_dataset")
 
 LABELS = ["A", "B", "C"]
 
@@ -35,8 +27,35 @@ def native_row(idx: int) -> dict:
     }
 
 
-def write_jsonl(path: Path, rows: list[dict]) -> Path:
-    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+def pair_row(idx: int, metadata: dict | None = None) -> dict:
+    return {
+        "pair_id": f"mcq-bias:suggested_answer:q{idx}",
+        "source_id": f"q{idx}",
+        "source": "logiqa",
+        "reference_messages": [{"role": "user", "content": f"Question {idx}?"}],
+        "variant_messages": [{"role": "user", "content": f"I think it's B. Question {idx}?"}],
+        "metadata": (
+            metadata
+            if metadata is not None
+            else {
+                "bias_type": "suggested_answer",
+                "correct_label": "A",
+                "biased_option": "B",
+                "valid_labels": LABELS,
+            }
+        ),
+    }
+
+
+def write_pair_artifact(path, rows):
+    """prompt_pairs inputs must be verified artifacts (JSONL + manifest)."""
+    write_verified_jsonl_artifact(
+        path,
+        rows,
+        artifact_schema=PAIR_ARTIFACT_SCHEMA,
+        schema_version=PAIR_ARTIFACT_SCHEMA_VERSION,
+        provenance={"test": True},
+    )
     return path
 
 
@@ -98,22 +117,7 @@ def test_existing_output_is_refused_without_force(inputs):
 
 
 def test_prompt_pairs_input_format(tmp_path):
-    pair_rows = [
-        {
-            "pair_id": "mcq-bias:suggested_answer:q0",
-            "source_id": "q0",
-            "source": "logiqa",
-            "reference_messages": [{"role": "user", "content": "Question 0?"}],
-            "variant_messages": [{"role": "user", "content": "I think it's B. Question 0?"}],
-            "metadata": {
-                "bias_type": "suggested_answer",
-                "correct_label": "A",
-                "biased_option": "B",
-                "valid_labels": LABELS,
-            },
-        }
-    ]
-    pairs = write_jsonl(tmp_path / "pairs.jsonl", pair_rows)
+    pairs = write_pair_artifact(tmp_path / "pairs.jsonl", [pair_row(0)])
     output = tmp_path / "out.parquet"
     builder.main(["--input", str(pairs), "--input-format", "prompt_pairs", "--output", str(output)])
     frame = pd.read_parquet(output)
@@ -125,15 +129,14 @@ def test_prompt_pairs_input_format(tmp_path):
     assert "I think it's B." in row["prompt"][0]["content"]
 
 
+def test_prompt_pairs_requires_a_verified_manifest(tmp_path):
+    # A bare JSONL without its manifest sidecar is not a frozen artifact.
+    pairs = write_jsonl(tmp_path / "pairs.jsonl", [pair_row(0)])
+    with pytest.raises(Exception, match="manifest"):
+        builder.main(["--input", str(pairs), "--input-format", "prompt_pairs", "--output", str(tmp_path / "o.parquet")])
+
+
 def test_prompt_pairs_metadata_must_carry_the_parser_contract(tmp_path):
-    pair_rows = [
-        {
-            "source_id": "q0",
-            "reference_messages": [{"role": "user", "content": "Question 0?"}],
-            "variant_messages": [{"role": "user", "content": "Biased question 0?"}],
-            "metadata": {"biased_option": "B"},  # no valid_labels
-        }
-    ]
-    pairs = write_jsonl(tmp_path / "pairs.jsonl", pair_rows)
+    pairs = write_pair_artifact(tmp_path / "pairs.jsonl", [pair_row(0, metadata={"biased_option": "B"})])
     with pytest.raises(ValueError, match="valid_labels"):
         builder.main(["--input", str(pairs), "--input-format", "prompt_pairs", "--output", str(tmp_path / "o.parquet")])

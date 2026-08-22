@@ -6,23 +6,16 @@ test runs against a real c-wei/AttCT checkout (``ATTCT_DIR`` or the
 ``/home/user/c-wei/AttCT`` default) and is skipped when absent.
 """
 
-import importlib.util
 import json
 import os
-import sys
 from pathlib import Path
 
 import pytest
+from vdct_test_helpers import load_script, write_jsonl
 
-_VDCT_VERL = Path(__file__).resolve().parents[1]
-if str(_VDCT_VERL) not in sys.path:
-    sys.path.insert(0, str(_VDCT_VERL))
+from ctm.artifacts import read_verified_jsonl_artifact
 
-_SPEC = importlib.util.spec_from_file_location(
-    "make_pairs_from_attct", _VDCT_VERL / "scripts" / "make_pairs_from_attct.py"
-)
-converter = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(converter)
+converter = load_script("make_pairs_from_attct")
 
 FIXTURE_WRAPPERS = """
 import re
@@ -57,7 +50,7 @@ def make_fixture_checkout(tmp_path: Path, prompts: list[str]) -> Path:
         {"messages": [{"role": "user", "content": prompt}, {"role": "assistant", "content": "..."}]}
         for prompt in prompts
     ]
-    (dataset_dir / "control_cot_train.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    write_jsonl(dataset_dir / "control_cot_train.jsonl", rows)
     return root
 
 
@@ -83,29 +76,36 @@ def test_converter_is_deterministic_per_seed(tmp_path):
     checkout = make_fixture_checkout(tmp_path, [CLEAN_MCQ])
     first = run(checkout, tmp_path / "a.jsonl", "--seed", "7")
     second = run(checkout, tmp_path / "b.jsonl", "--seed", "7")
-    third = run(checkout, tmp_path / "c.jsonl", "--seed", "8")
     assert first == second
-    assert first != third or first[0]["biased_messages"] == third[0]["biased_messages"]
 
 
-def test_rows_without_choices_are_skipped_and_duplicates_dropped(tmp_path):
+def test_output_is_a_verified_artifact_with_provenance(tmp_path):
     checkout = make_fixture_checkout(tmp_path, [CLEAN_MCQ, "No choices here.", CLEAN_MCQ])
     output = tmp_path / "pairs.jsonl"
     pairs = run(checkout, output)
     assert len(pairs) == 1
-    manifest = json.loads((tmp_path / "pairs.jsonl.manifest.json").read_text())
-    assert manifest["n_no_choices"] == 1
-    assert manifest["n_duplicates"] == 1
-    assert manifest["n_pairs"] == 1
-    assert manifest["seed"] == 42
+    # The manifest sidecar verifies (schema, row count, content hash) and
+    # carries the converter's provenance.
+    rows, manifest = read_verified_jsonl_artifact(
+        output,
+        expected_schema=converter.PAIR_ARTIFACT_SCHEMA,
+        expected_schema_version=converter.PAIR_ARTIFACT_SCHEMA_VERSION,
+    )
+    assert len(rows) == 1
+    provenance = manifest["provenance"]
+    assert provenance["n_no_choices"] == 1
+    assert provenance["n_duplicates"] == 1
+    assert provenance["seed"] == 42
+    assert provenance["source"]["row_count"] == 3
 
 
 def test_existing_output_is_refused_without_force(tmp_path):
     checkout = make_fixture_checkout(tmp_path, [CLEAN_MCQ])
     output = tmp_path / "pairs.jsonl"
-    run(checkout, output)
+    first = run(checkout, output)
     with pytest.raises(SystemExit, match="exists"):
         converter.main(["--attct-dir", str(checkout), "--output", str(output)])
+    assert run(checkout, output, "--force") == first  # explicit overwrite works
 
 
 def _real_checkout() -> Path | None:
@@ -126,11 +126,7 @@ def test_against_real_attct_checkout(tmp_path):
         assert pair["biased_option"] in pair["option_labels"]
         assert pair["unbiased_messages"][0]["content"] in pair["biased_messages"][0]["content"]
 
-    builder_spec = importlib.util.spec_from_file_location(
-        "make_vdct_dataset", _VDCT_VERL / "scripts" / "make_vdct_dataset.py"
-    )
-    builder = importlib.util.module_from_spec(builder_spec)
-    builder_spec.loader.exec_module(builder)
+    builder = load_script("make_vdct_dataset")
     parquet = tmp_path / "vdct.parquet"
     builder.main(["--input", str(output), "--output", str(parquet)])
     import pandas as pd

@@ -37,7 +37,8 @@ distributions get the worst-case reward `-ln2 + λ·log(ε)` and still train
 Advantages: per-(group, side) standardization via the parity-tested
 `slime_port.advantages.normalize_grouped` (per-item mode). The
 batch-centered KL vs the frozen base is reused from the RMCT recipe at its
-default (`vdct.kl_coef=0.05`). Defaults: `λ=1.0` (smoke sweeps
+default (`vdct.kl_coef=0.05`; setting it to 0 also skips the per-step
+reference forward entirely). Defaults: `λ=1.0` (smoke sweeps
 {0.3, 1.0, 3.0}), `ε=1e-3`, LR 1e-5 constant, response ceiling 8,192,
 16 datapoints/step → `data.train_batch_size=64` rows → 512 rollouts/step,
 256 carrying gradient. Elicitation format decision and its literature
@@ -48,15 +49,16 @@ grounding: `notes/elicitation_scheme.md`.
 | Path | What it is |
 | --- | --- |
 | `recipe/vdct/vdct_core.py` | Pure math: JS/log-score/entropy/TV, reward + per-group advantage assembly, trainability flags, verl-batch adapters. No Ray, no verl. Bootstraps and reuses `recipe.rmct.rmct_core` (KL term) and `slime_port` (standardization). |
+| `recipe/vdct/vdct_schema.py` | Zero-dependency leaf module owning the row vocabulary (variant/kind strings) and the shared JSONL reader — importable without the rmct/slime bootstrap. |
 | `recipe/vdct/vdct_elicitation.py` | Elicitation instruction text + strict distribution parser (single source of truth for the surface format). |
 | `recipe/vdct/vdct_agent_loop.py` | `@register("vdct")` loop; dispatches on the row's `kind` (see deviation V1). |
-| `recipe/vdct/vdct_trainer.py` | `RayVDCTTrainer(RayPPOTrainer)`: advantage/KL/masking stage + `_log_rollout_data` override that threads parsed distributions into rollout dumps. |
-| `recipe/vdct/main_vdct.py` | Entry point (`python -m recipe.vdct.main_vdct`), structural copy of `main_rmct`. |
+| `recipe/vdct/vdct_trainer.py` | `RayVDCTTrainer(RayPPOTrainer)`: advantage/KL/masking stage + a generic `_log_rollout_data` override that dumps every per-row non-tensor column (loop fields and computed rewards/advantages/targets alike). |
+| `recipe/vdct/main_vdct.py` | Entry point (`python -m recipe.vdct.main_vdct`); inherits the RMCT runner (role-mapping fix lives in one place) and gates the reference policy on `vdct.kl_coef`. |
 | `recipe/vdct/config/` | Hydra overlay (`vdct_trainer.yaml`) + agent-loop registration. |
-| `scripts/make_pairs_from_attct.py` | c-wei/AttCT `sycophancy_bct` assets → native paired-prompt JSONL (see Data). |
+| `scripts/make_pairs_from_attct.py` | c-wei/AttCT `sycophancy_bct` assets → native paired-prompt JSONL, published as a verified `ctm.artifacts` JSONL/manifest pair (see Data). |
 | `scripts/make_vdct_dataset.py` | Paired-prompt JSONL → verl parquet, 4 rows/datapoint. |
 | `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations. |
-| `tests/` | 63 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
+| `tests/` | 65 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
 | `notes/elicitation_scheme.md` | Phase 0 note fixing the elicitation format. |
 
 Run tests: `uv run --no-sync python -m pytest experiments/vdct_verl/tests -q`
@@ -72,8 +74,9 @@ Transformer Stack* codebase), the training pool is its 4,000-prompt clean
 train split (`datasets/sycophancy_bct/control_cot_train.jsonl`; 1,000-prompt
 eval split held out) wrapped with its own 12 sycophancy templates
 (`data/wrappers.py`). The converter freezes that batch-time-random
-construction deterministically (seeded per question) and records the
-checkout SHA + source hash in a manifest:
+construction deterministically (seeded per question) and publishes a
+verified JSONL/manifest artifact pair (`ctm.artifacts`) whose provenance
+records the checkout SHA, source-file identity, seed, and skip counts:
 
 ```bash
 export ATTCT_DIR=/path/to/c-wei/AttCT
@@ -89,7 +92,9 @@ arm trains on the identical pool. Alternate inputs remain supported:
 native mcq-bias rows (`--input-format native`, e.g. LogiQA+HellaSwag
 wrong-argument pairs from `ctm_data.adapters.mcq_bias.materialize`) and the
 shared `ctm.prompt_pairs` schema (`--input-format prompt_pairs`, e.g. the
-irpan_2510_27062 artifacts).
+irpan_2510_27062 artifacts — loaded manifest-verified through
+`ctm.settings.pairs.load_pair_artifact`, per the repo's frozen-artifact
+rule).
 
 Then the VDCT parquet:
 

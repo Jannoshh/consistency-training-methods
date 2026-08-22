@@ -9,13 +9,14 @@ dispatches on the row's ``kind``:
   (``vdct_elicitation.parse_option_distribution``) and forwarded dense in
   ``option_labels`` order.
 - ``answer`` rows carry the unmodified paired prompt; the response is
-  classified with the SAME functions the RMCT/slime port uses
-  (``mcq_bias.parsers.parse_answer`` + vendored ``matches_bias``, imported
-  from ``slime_port.rmct_rollout``), and additionally the parsed answer's
-  option index is forwarded — the log-score term needs the actual option,
-  which the one-bit ``trait`` cannot supply. This is why answer rows route
-  here rather than to the ``rmct`` loop (README deviation V1); prompt,
-  sampling, and classification are otherwise identical.
+  classified with the SAME parser the RMCT/slime port uses
+  (``mcq_bias.parsers.parse_answer``, loaded via ``slime_port``), and the
+  parsed answer's option index is forwarded — the log-score term needs the
+  actual option, which the RMCT loop's one-bit ``trait`` cannot supply. This
+  is why answer rows route here rather than to the ``rmct`` loop (README
+  deviation V1); prompt and sampling are otherwise identical. The trait bit
+  itself is not forwarded: it is derivable offline from the dumped
+  ``answer_option`` and ``biased_option``.
 
 All bookkeeping goes through ``extra_fields`` (propagated unconditionally by
 ``AgentLoopWorker._postprocess``, unlike dataset columns — same rationale as
@@ -30,6 +31,7 @@ signal — same as the RMCT loop).
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from typing import Any
@@ -46,25 +48,22 @@ from .vdct_elicitation import parse_option_distribution
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
-_ANSWER_TOOLS: list[Any] = []
 
-
-def _answer_tools():
-    """``(parse_answer, matches_bias)`` — the exact functions the RMCT/slime
+@functools.cache
+def _parse_answer():
+    """``mcq_bias.parsers.parse_answer`` — the exact parser the RMCT/slime
     port classifies with. Imported lazily: ``slime_port.rmct_rollout`` pulls
     in ``rollout_writer``, which needs ``zstandard`` (install it in the verl
     image, see README)."""
-    if not _ANSWER_TOOLS:
-        try:
-            from slime_port.rmct_rollout import _load_parse_answer, _matches_bias
-        except ImportError as exc:  # pragma: no cover - environment problem, not logic
-            raise ImportError(
-                "VDCT answer classification needs the slime port importable "
-                "(bootstrapped via vdct_core / RMCT_SLIME_PORT_DIR) and its deps "
-                "installed: pip install zstandard mcq-bias"
-            ) from exc
-        _ANSWER_TOOLS.append((_load_parse_answer(), _matches_bias))
-    return _ANSWER_TOOLS[0]
+    try:
+        from slime_port.rmct_rollout import _load_parse_answer
+    except ImportError as exc:  # pragma: no cover - environment problem, not logic
+        raise ImportError(
+            "VDCT answer classification needs the slime port importable "
+            "(bootstrapped via vdct_core / RMCT_SLIME_PORT_DIR) and its deps "
+            "installed: pip install zstandard mcq-bias"
+        ) from exc
+    return _load_parse_answer()
 
 
 @register("vdct")
@@ -106,29 +105,25 @@ class VDCTAgentLoop(AgentLoopBase):
         truncated = len(output.token_ids) >= self.response_length
         response_ids = output.token_ids[: self.response_length]
         response_logprobs = output.log_probs[: self.response_length] if output.log_probs else None
-        text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
+        # Decoding a multi-thousand-token response is blocking work; keep it
+        # off the shared event loop like verl's own tokenizer calls.
+        text = await self.loop.run_in_executor(
+            None, lambda: self.tokenizer.decode(response_ids, skip_special_tokens=True)
+        )
 
         option_distribution: list[float] | None = None
         answer_option: str | None = None
         answer_index: int | None = None
-        trait: float | None = None
         if kind == DISTRIBUTION_KIND:
-            option_distribution = parse_option_distribution(text, option_labels)
-            parse_ok = option_distribution is not None and not truncated
-            if truncated:
-                option_distribution = None
+            parsed = parse_option_distribution(text, option_labels)
+            parse_ok = parsed is not None and not truncated
+            option_distribution = parsed if parse_ok else None
         else:
-            parse_answer, matches_bias = _answer_tools()
-            answer = parse_answer(text)
-            if answer is not None and answer in option_labels:
-                answer_option = answer
-                answer_index = option_labels.index(answer)
-                trait = float(matches_bias(answer, biased_option))
-            parse_ok = answer_index is not None and not truncated
-            if not parse_ok:
-                answer_option = None
-                answer_index = None
-                trait = None
+            answer = _parse_answer()(text)
+            index = option_labels.index(answer) if answer in option_labels else None
+            parse_ok = index is not None and not truncated
+            answer_option = answer if parse_ok else None
+            answer_index = index if parse_ok else None
 
         return AgentLoopOutput(
             prompt_ids=prompt_ids,
@@ -146,7 +141,6 @@ class VDCTAgentLoop(AgentLoopBase):
                 "option_distribution": option_distribution,
                 "answer_option": answer_option,
                 "answer_index": answer_index,
-                "trait": trait,
                 "option_labels": option_labels,
                 "biased_option": biased_option,
                 "response_truncated": truncated,
