@@ -113,17 +113,14 @@ def test_mean_distribution():
 
 # ── Batch assembly ───────────────────────────────────────────────────────────
 
-ANCHOR = (0.5, 0.3, 0.2)
 
-
-def dist_row(variant, dist, group="g0", parse_ok=True, anchor=ANCHOR):
+def dist_row(variant, dist, group="g0", parse_ok=True):
     return VDCTRow(
         group_id=group,
         variant=variant,
         kind=DISTRIBUTION_KIND,
         parse_ok=parse_ok,
         option_distribution=tuple(dist) if dist is not None else None,
-        q_ref_initial=anchor,
     )
 
 
@@ -155,7 +152,8 @@ def test_basic_group_rewards_hand_computed():
     result = compute_row_advantages(rows, config)
 
     target = [(0.6 + 0.4) / 2, (0.3 + 0.5) / 2, 0.1]  # mean parsed reference dists
-    expected_ref = [-js_divergence(d, ANCHOR) + log_score(d, [0, 1], 1e-3) for d in (ref_d1, ref_d2)]
+    # Reference side: proper-scoring term only (no anchor, 2026-08-22 decision).
+    expected_ref = [log_score(d, [0, 1], 1e-3) for d in (ref_d1, ref_d2)]
     expected_train = [-js_divergence(d, target) + log_score(d, [1], 1e-3) for d in (train_d1, train_d2)]
     assert result.rewards[0] == pytest.approx(expected_ref[0], abs=APPROX)
     assert result.rewards[1] == pytest.approx(expected_ref[1], abs=APPROX)
@@ -231,24 +229,25 @@ def test_unparsed_reference_distributions_are_excluded_from_target():
     assert result.q_ref_target["g0"] == pytest.approx([0.6, 0.3, 0.1], abs=APPROX)
 
 
-def test_all_reference_unparsed_falls_back_to_anchor():
+def test_all_reference_unparsed_drops_the_training_side():
+    """No parsed reference distributions -> no consistency target -> training
+    rows skipped whole (the analog of RMCT's no_reference_rate)."""
     rows = [
         dist_row(REFERENCE_VARIANT, None, parse_ok=False),
         dist_row(TRAINING_VARIANT, (0.2, 0.7, 0.1)),
         answer_row(TRAINING_VARIANT, 1),
     ]
-    config = VDCTConfig()
-    result = compute_row_advantages(rows, config)
-    assert result.q_ref_target["g0"] == pytest.approx(list(ANCHOR), abs=APPROX)
-    expected = -js_divergence((0.2, 0.7, 0.1), ANCHOR) + log_score((0.2, 0.7, 0.1), [1], config.epsilon)
-    assert result.rewards[1] == pytest.approx(expected, abs=APPROX)
-    assert result.metrics["vdct/q_ref_target_fallback_groups"] == 1.0
+    result = compute_row_advantages(rows)
+    assert result.q_ref_target["g0"] is None
+    assert not result.trainable[1]
+    assert result.advantages[1] == 0.0
+    assert result.skip_reasons[1] == "no_reference_target"
 
 
-def test_reference_side_is_anchored_to_q_ref_initial_not_current_mean():
-    """The anchor blocks co-drift: reference rewards must score against the
-    FROZEN initial distribution even when the current reference mean differs."""
-    current = (0.1, 0.1, 0.8)  # far from ANCHOR
+def test_reference_side_has_no_consistency_term():
+    """No anchor (2026-08-22 decision): reference rewards are the
+    proper-scoring term alone, regardless of where the distribution sits."""
+    current = (0.1, 0.1, 0.8)
     rows = [
         dist_row(REFERENCE_VARIANT, current),
         dist_row(REFERENCE_VARIANT, (0.1, 0.2, 0.7)),
@@ -256,8 +255,7 @@ def test_reference_side_is_anchored_to_q_ref_initial_not_current_mean():
     ]
     config = VDCTConfig()
     result = compute_row_advantages(rows, config)
-    expected = -js_divergence(current, ANCHOR) + log_score(current, [2], config.epsilon)
-    assert result.rewards[0] == pytest.approx(expected, abs=APPROX)
+    assert result.rewards[0] == pytest.approx(log_score(current, [2], config.epsilon), abs=APPROX)
 
 
 def test_missing_answer_samples_omit_log_score_term():
@@ -283,7 +281,7 @@ def test_lambda_zero_drops_the_proper_scoring_term():
     ]
     result = compute_row_advantages(rows, VDCTConfig(lambda_log_score=0.0))
     assert result.rewards[0] == pytest.approx(-js_divergence((0.2, 0.7, 0.1), [0.5, 0.3, 0.2]), abs=APPROX)
-    assert result.rewards[1] == pytest.approx(-js_divergence((0.5, 0.3, 0.2), ANCHOR), abs=APPROX)
+    assert result.rewards[1] == 0.0  # reference side: no consistency term, lambda=0 drops the log score
 
 
 def test_zero_signal_batch_masks_everything():
@@ -328,28 +326,14 @@ def test_row_order_invariance():
 
 def test_unknown_variant_and_kind_are_rejected():
     with pytest.raises(ValueError, match="unknown variant"):
-        compute_row_advantages([VDCTRow("g0", "anchor", DISTRIBUTION_KIND, True, (1.0,), None, (1.0,))])
+        compute_row_advantages([VDCTRow("g0", "anchor", DISTRIBUTION_KIND, True, (1.0,))])
     with pytest.raises(ValueError, match="unknown kind"):
-        compute_row_advantages([VDCTRow("g0", REFERENCE_VARIANT, "logits", True, (1.0,), None, (1.0,))])
+        compute_row_advantages([VDCTRow("g0", REFERENCE_VARIANT, "logits", True, (1.0,))])
 
 
-def test_distribution_row_requires_anchor():
-    with pytest.raises(ValueError, match="q_ref_initial"):
-        compute_row_advantages([VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, (0.5, 0.5), None, None)])
-
-
-def test_inconsistent_anchors_within_group_are_rejected():
-    rows = [
-        dist_row(REFERENCE_VARIANT, (0.5, 0.3, 0.2), anchor=(0.5, 0.3, 0.2)),
-        dist_row(TRAINING_VARIANT, (0.5, 0.3, 0.2), anchor=(0.2, 0.3, 0.5)),
-    ]
-    with pytest.raises(ValueError, match="inconsistent q_ref_initial"):
-        compute_row_advantages(rows)
-
-
-def test_distribution_anchor_length_mismatch_is_rejected():
-    with pytest.raises(ValueError, match="length mismatch"):
-        compute_row_advantages([VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, (0.5, 0.5), None, (1.0,))])
+def test_parsed_distribution_row_requires_a_distribution():
+    with pytest.raises(ValueError, match="without option_distribution"):
+        compute_row_advantages([VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, None)])
 
 
 # ── verl-batch adapters ──────────────────────────────────────────────────────
@@ -363,10 +347,9 @@ def test_build_rows_from_object_arrays():
         "parse_ok": np.array([True, False]),
         "option_distribution": np.array([[0.5, 0.5], None], dtype=object),
         "answer_index": np.array([None, None], dtype=object),
-        "q_ref_initial": np.array([[0.4, 0.6], [0.4, 0.6]], dtype=object),
     }
     rows = build_rows(non_tensor)
-    assert rows[0] == VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, (0.5, 0.5), None, (0.4, 0.6))
+    assert rows[0] == VDCTRow("g0", REFERENCE_VARIANT, DISTRIBUTION_KIND, True, (0.5, 0.5), None)
     assert rows[1].kind == ANSWER_KIND and rows[1].option_distribution is None
 
 

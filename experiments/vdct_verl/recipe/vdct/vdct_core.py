@@ -24,19 +24,27 @@ Distribution rollouts carry gradient on both sides; answer rollouts never do
 structural block against self-fulfilling distributions).
 
     training side:   r = -JS(q, q_ref_target) + lambda * mean_m log(max(q[a_m], eps))
-    reference side:  r = -JS(q, q_ref_initial) + lambda * mean_m log(max(q[a_m], eps))
+    reference side:  r =                        lambda * mean_m log(max(q[a_m], eps))
 
 ``q_ref_target`` is this step's mean parsed reference-side distribution for
-the group; ``q_ref_initial`` is the frozen base-model anchor carried as a
-dataset column. Answers ``a_m`` always come from the SAME side's answer
-rollouts. An unparseable distribution is excluded from ``q_ref_target`` and
-receives the worst-case reward ``-JS_MAX + lambda * log(eps)`` while still
-carrying gradient, so format compliance is itself trained.
+the group. Answers ``a_m`` always come from the SAME side's answer rollouts.
+An unparseable distribution is excluded from ``q_ref_target`` and receives
+the worst-case reward ``-JS_MAX + lambda * log(eps)`` — strictly below any
+parseable reward on either side — while still carrying gradient, so format
+compliance is itself trained.
 
-Documented edge policies (all counted in metrics):
+There is NO anchor term (2026-08-22 decision): the plan's frozen
+``q_ref_initial`` reference target is dropped for now, so the reference side
+trains on calibration alone and nothing structurally blocks the pair from
+co-drifting to a matched-but-shifted distribution — the KL term against the
+frozen base, the entropy/calibration diagnostics, and the control arm are the
+monitors. Same status as the RMCT port's unsupported ``anchor_weight``.
 
-- every reference-side distribution unparsed → the training side's
-  consistency target falls back to ``q_ref_initial`` (the anchor);
+Documented edge policies (all visible in metrics / skip reasons):
+
+- every reference-side distribution unparsed → the group has no consistency
+  target, so its training-side distribution rows are skipped whole
+  (``no_reference_target``, the analog of RMCT's ``no_reference_rate``);
 - no parsed same-side answer rollouts → the log-score term is omitted for
   that side's rewards this step.
 
@@ -74,7 +82,7 @@ if not (_RMCT_ROOT / "recipe" / "rmct" / "rmct_core.py").exists():
 if str(_RMCT_ROOT) not in sys.path:
     sys.path.insert(0, str(_RMCT_ROOT))
 
-from recipe.rmct.rmct_core import centered_kl_penalty
+from recipe.rmct.rmct_core import centered_kl_penalty  # re-export; bootstraps slime_port
 from slime_port.advantages import normalize_grouped
 
 __all__ = [
@@ -114,9 +122,9 @@ _SIGNAL_EPS = 1e-8  # same has-signal threshold as slime_port.pipeline
 class VDCTRow:
     """One verl batch row, reduced to what the VDCT math reads.
 
-    ``option_distribution`` and ``q_ref_initial`` are dense vectors in the
-    dataset's frozen ``option_labels`` order; ``answer_index`` indexes the
-    same order. Fields are only meaningful for the row's ``kind`` (and, for
+    ``option_distribution`` is a dense vector in the dataset's frozen
+    ``option_labels`` order; ``answer_index`` indexes the same order. Fields
+    are only meaningful for the row's ``kind`` (and, for
     ``option_distribution``, when ``parse_ok``).
     """
 
@@ -126,7 +134,6 @@ class VDCTRow:
     parse_ok: bool
     option_distribution: tuple[float, ...] | None = None
     answer_index: int | None = None
-    q_ref_initial: tuple[float, ...] | None = None
 
 
 @dataclass
@@ -148,8 +155,8 @@ class VDCTBatchResult:
     skip_reasons: list[str | None]
     has_signal: bool
     metrics: dict[str, float] = field(default_factory=dict)
-    # Per-group consistency target actually used this step (None = no group
-    # distribution rows at all).
+    # Per-group consistency target used this step (None = no parsed
+    # reference-side distributions, group's training rows skipped).
     q_ref_target: dict[str, list[float] | None] = field(default_factory=dict)
 
 
@@ -229,7 +236,9 @@ def log_score(
 
 def worst_case_reward(config: VDCTConfig) -> float:
     """Reward for an unparseable distribution: maximal JS penalty plus the
-    floored log score — strictly below any parseable distribution's reward."""
+    floored log score — strictly below any parseable distribution's reward on
+    either side (reference-side parseable rewards are bounded below by
+    ``lambda * log(eps)``)."""
     return -JS_MAX + config.lambda_log_score * math.log(config.epsilon)
 
 
@@ -241,13 +250,8 @@ def _validate_row(row_idx: int, row: VDCTRow) -> None:
         raise ValueError(f"row {row_idx}: unknown variant {row.variant!r}")
     if row.kind not in (DISTRIBUTION_KIND, ANSWER_KIND):
         raise ValueError(f"row {row_idx}: unknown kind {row.kind!r}")
-    if row.kind == DISTRIBUTION_KIND:
-        if row.q_ref_initial is None:
-            raise ValueError(f"row {row_idx}: distribution row without q_ref_initial (frozen anchor column)")
-        if row.parse_ok and row.option_distribution is None:
-            raise ValueError(f"row {row_idx}: parse_ok distribution row without option_distribution")
-        if row.option_distribution is not None and len(row.option_distribution) != len(row.q_ref_initial):
-            raise ValueError(f"row {row_idx}: option_distribution/q_ref_initial length mismatch")
+    if row.kind == DISTRIBUTION_KIND and row.parse_ok and row.option_distribution is None:
+        raise ValueError(f"row {row_idx}: parse_ok distribution row without option_distribution")
     if row.kind == ANSWER_KIND and row.parse_ok and row.answer_index is None:
         raise ValueError(f"row {row_idx}: parse_ok answer row without answer_index")
 
@@ -284,10 +288,9 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
     slices: list[tuple[int, int]] = []
     q_ref_target: dict[str, list[float] | None] = {}
 
-    n_fallback_groups = 0
     n_sides_missing_answers = 0
     n_unparsed_dist = 0
-    js_sums = {REFERENCE_VARIANT: [0.0, 0], TRAINING_VARIANT: [0.0, 0]}
+    js_train = [0.0, 0]
     log_score_sums = {REFERENCE_VARIANT: [0.0, 0], TRAINING_VARIANT: [0.0, 0]}
     entropy_sums = {REFERENCE_VARIANT: [0.0, 0], TRAINING_VARIANT: [0.0, 0]}
     tv_sum, tv_n = 0.0, 0
@@ -309,37 +312,29 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
         parsed_ref_dists = [rows[i].option_distribution for i in dist_rows[REFERENCE_VARIANT] if rows[i].parse_ok]
         parsed_train_dists = [rows[i].option_distribution for i in dist_rows[TRAINING_VARIANT] if rows[i].parse_ok]
 
-        all_dist_rows = dist_rows[REFERENCE_VARIANT] + dist_rows[TRAINING_VARIANT]
-        if not all_dist_rows:
-            q_ref_target[group_id] = None
-            continue
-        anchor = list(rows[all_dist_rows[0]].q_ref_initial)
-        for i in all_dist_rows:
-            if list(rows[i].q_ref_initial) != anchor:
-                raise ValueError(f"group {group_id!r}: inconsistent q_ref_initial across rows")
+        target = mean_distribution(parsed_ref_dists) if parsed_ref_dists else None
+        q_ref_target[group_id] = target
 
-        if parsed_ref_dists:
-            target = mean_distribution(parsed_ref_dists)
-        else:
-            target = anchor
-            if dist_rows[TRAINING_VARIANT]:
-                n_fallback_groups += 1
-        q_ref_target[group_id] = list(target)
-
-        if parsed_ref_dists and parsed_train_dists:
-            tv_sum += total_variation(mean_distribution(parsed_train_dists), mean_distribution(parsed_ref_dists))
+        if target is not None and parsed_train_dists:
+            tv_sum += total_variation(mean_distribution(parsed_train_dists), target)
             tv_n += 1
 
         for variant, consistency_target in (
-            (REFERENCE_VARIANT, anchor),
+            (REFERENCE_VARIANT, None),  # no anchor term (see module docstring)
             (TRAINING_VARIANT, target),
         ):
             side_rows = dist_rows[variant]
             if not side_rows:
                 continue
+            if variant == TRAINING_VARIANT and target is None:
+                # No parsed reference-side distributions: no consistency
+                # target, so the training side is skipped whole — the analog
+                # of RMCT's no_reference_rate drop.
+                for i in side_rows:
+                    skip_reasons[i] = "no_reference_target"
+                continue
             side_answers = answers[variant]
-            side_has_parsed = any(rows[i].parse_ok for i in side_rows)
-            if not side_answers and side_has_parsed:
+            if not side_answers and any(rows[i].parse_ok for i in side_rows):
                 n_sides_missing_answers += 1
             slice_start = len(flat_rewards)
             for i in side_rows:
@@ -349,10 +344,12 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
                     n_unparsed_dist += 1
                 else:
                     q = row.option_distribution
-                    js = js_divergence(q, consistency_target)
-                    reward = -js
-                    js_sums[variant][0] += js
-                    js_sums[variant][1] += 1
+                    reward = 0.0
+                    if consistency_target is not None:
+                        js = js_divergence(q, consistency_target)
+                        reward -= js
+                        js_train[0] += js
+                        js_train[1] += 1
                     entropy_sums[variant][0] += entropy(q)
                     entropy_sums[variant][1] += 1
                     if side_answers:
@@ -387,8 +384,7 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
     metrics = {
         "vdct/dist_parse_rate": n_dist_parsed / max(n_dist, 1),
         "vdct/answer_parse_rate": n_answer_parsed / max(n_answer, 1),
-        "vdct/js_train_mean": _mean(js_sums[TRAINING_VARIANT]),
-        "vdct/js_ref_mean": _mean(js_sums[REFERENCE_VARIANT]),
+        "vdct/js_train_mean": _mean(js_train),
         "vdct/log_score_train_mean": _mean(log_score_sums[TRAINING_VARIANT]),
         "vdct/log_score_ref_mean": _mean(log_score_sums[REFERENCE_VARIANT]),
         "vdct/entropy_train_mean": _mean(entropy_sums[TRAINING_VARIANT]),
@@ -399,7 +395,6 @@ def compute_row_advantages(rows: list[VDCTRow], config: VDCTConfig | None = None
         "vdct/n_grad_rows": float(sum(trainable)),
         "vdct/grad_row_frac": sum(trainable) / max(n_dist, 1),
         "vdct/n_unparsed_dist_rows": float(n_unparsed_dist),
-        "vdct/q_ref_target_fallback_groups": float(n_fallback_groups),
         "vdct/sides_missing_answer_samples": float(n_sides_missing_answers),
         "vdct/lambda_log_score": config.lambda_log_score,
     }
@@ -423,9 +418,9 @@ REQUIRED_ROW_FIELDS = ("group_id", "variant", "kind", "parse_ok")
 def build_rows(non_tensor_batch: dict) -> list[VDCTRow]:
     """Extract the VDCT row view from a verl batch's non-tensor columns.
 
-    ``option_distribution`` / ``answer_index`` / ``q_ref_initial`` arrive as
-    per-row object entries (lists or None) forwarded by the agent loop
-    through ``extra_fields``.
+    ``option_distribution`` / ``answer_index`` arrive as per-row object
+    entries (lists or None) forwarded by the agent loop through
+    ``extra_fields``.
     """
     missing = [key for key in REQUIRED_ROW_FIELDS if key not in non_tensor_batch]
     if missing:
@@ -441,11 +436,9 @@ def build_rows(non_tensor_batch: dict) -> list[VDCTRow]:
 
     dists = column("option_distribution")
     answer_indices = column("answer_index")
-    anchors = column("q_ref_initial")
     rows = []
     for i in range(n):
         dist = dists[i]
-        anchor = anchors[i]
         answer_index = answer_indices[i]
         rows.append(
             VDCTRow(
@@ -455,7 +448,6 @@ def build_rows(non_tensor_batch: dict) -> list[VDCTRow]:
                 parse_ok=bool(non_tensor_batch["parse_ok"][i]),
                 option_distribution=tuple(float(v) for v in dist) if dist is not None else None,
                 answer_index=int(answer_index) if answer_index is not None else None,
-                q_ref_initial=tuple(float(v) for v in anchor) if anchor is not None else None,
             )
         )
     return rows

@@ -131,22 +131,8 @@ def test_against_real_attct_checkout(tmp_path):
     )
     builder = importlib.util.module_from_spec(builder_spec)
     builder_spec.loader.exec_module(builder)
-    anchors = tmp_path / "anchors.jsonl"
-    anchors.write_text(
-        "".join(
-            json.dumps(
-                {
-                    "question_id": pair["question_id"],
-                    "option_labels": pair["option_labels"],
-                    "q_ref_initial": [1.0 / len(pair["option_labels"])] * len(pair["option_labels"]),
-                }
-            )
-            + "\n"
-            for pair in pairs
-        )
-    )
     parquet = tmp_path / "vdct.parquet"
-    builder.main(["--input", str(output), "--anchors", str(anchors), "--output", str(parquet)])
+    builder.main(["--input", str(output), "--output", str(parquet)])
     import pandas as pd
 
     assert len(pd.read_parquet(parquet)) == 32

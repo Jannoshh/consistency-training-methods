@@ -9,9 +9,9 @@ distribution over the answer options.
 
 **Status: Phase 0 + Phase 2 implemented and CPU-tested (2026-08-22). Not yet
 executed on GPU.** Phase 1 (pod bring-up, model confirmation, audit set,
-base-model diagnostics, `q_ref_initial` anchors, eval-path check) and the
-Phase 3 smoke are pending; per the plan, no training run starts before the
-Phase 1 and Phase 3 stop points are explicitly cleared.
+base-model diagnostics, eval-path check) and the Phase 3 smoke are pending;
+per the plan, no training run starts before the Phase 1 and Phase 3 stop
+points are explicitly cleared.
 
 ## Method (one paragraph)
 
@@ -24,11 +24,14 @@ the structural block against self-fulfilling distributions). Per
 distribution rollout with parsed distribution `q`:
 
     training side:   r = -JS(q, q_ref_target) + λ · (1/M) Σ_m log(max(q[a_m], ε))
-    reference side:  r = -JS(q, q_ref_initial) + λ · (1/M) Σ_m log(max(q[a_m], ε))
+    reference side:  r =                         λ · (1/M) Σ_m log(max(q[a_m], ε))
 
 `q_ref_target` is this step's mean parsed reference-side distribution for
-the group; `q_ref_initial` is the frozen base-model anchor (dataset column,
-blocks co-drift); `a_m` are the same side's parsed answers. Unparseable
+the group; `a_m` are the same side's parsed answers. There is NO anchor term
+(2026-08-22 decision — the plan's frozen `q_ref_initial` is dropped for
+now, so nothing structurally blocks matched-but-shifted co-drift; the KL
+term, the entropy/calibration diagnostics, and the control arm are the
+monitors, and Phase 1's anchor precomputation step disappears). Unparseable
 distributions get the worst-case reward `-ln2 + λ·log(ε)` and still train
 (format compliance is trained), but are excluded from `q_ref_target`.
 Advantages: per-(group, side) standardization via the parity-tested
@@ -51,9 +54,9 @@ grounding: `notes/elicitation_scheme.md`.
 | `recipe/vdct/main_vdct.py` | Entry point (`python -m recipe.vdct.main_vdct`), structural copy of `main_rmct`. |
 | `recipe/vdct/config/` | Hydra overlay (`vdct_trainer.yaml`) + agent-loop registration. |
 | `scripts/make_pairs_from_attct.py` | c-wei/AttCT `sycophancy_bct` assets → native paired-prompt JSONL (see Data). |
-| `scripts/make_vdct_dataset.py` | Paired-prompt JSONL (+ frozen anchors) → verl parquet, 4 rows/datapoint. |
+| `scripts/make_vdct_dataset.py` | Paired-prompt JSONL → verl parquet, 4 rows/datapoint. |
 | `scripts/vdct_diagnostics.py` | ECE / entropy / cue-invariance from rollout dumps or audit generations. |
-| `tests/` | 68 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
+| `tests/` | 63 CPU tests: hand-computed reward cases, standardization parity vs `slime_port`, parser incl. malformed cases, builder schema/refusals, converter determinism, diagnostics. |
 | `notes/elicitation_scheme.md` | Phase 0 note fixing the elicitation format. |
 
 Run tests: `uv run --no-sync python -m pytest experiments/vdct_verl/tests -q`
@@ -88,14 +91,11 @@ wrong-argument pairs from `ctm_data.adapters.mcq_bias.materialize`) and the
 shared `ctm.prompt_pairs` schema (`--input-format prompt_pairs`, e.g. the
 irpan_2510_27062 artifacts).
 
-Then the VDCT parquet (anchors come from Phase 1 step 7 — the base model's
-mean stated distribution per datapoint on the reference prompt; the builder
-refuses to run without 100% coverage):
+Then the VDCT parquet:
 
 ```bash
 uv run --no-sync python experiments/vdct_verl/scripts/make_vdct_dataset.py \
     --input  data/attct_sycophancy_pairs_cot_train.jsonl \
-    --anchors data/qwen3_8b_anchors.jsonl \
     --output /workspace/vdct/data/vdct_rows.parquet
 ```
 
@@ -177,7 +177,7 @@ Two evaluation tracks, both untouched by this recipe:
 | # | Deviation | Why |
 | --- | --- | --- |
 | V1 | **Answer rows route to the `vdct` agent loop, not the `rmct` loop.** Prompt, sampling, and classification are identical (same `parse_answer` + `matches_bias` via `slime_port`), but the loop additionally forwards the parsed option index. | The log-score term needs `q[a_m]` — the actual option each answer rollout chose. The RMCT loop forwards only the one-bit `trait`, which cannot supply it. |
-| V2 | **`q_ref_target` falls back to `q_ref_initial` when every reference-side distribution fails to parse** (counted in `vdct/q_ref_target_fallback_groups`), instead of dropping the group as RMCT does on a missing reference rate. | The anchor is always available (100%-coverage dataset column) and is exactly the anchor semantics; at ≥95% parse compliance the case is rare. |
+| V2 | **No anchor term** (2026-08-22 user decision): reference-side rollouts train on the proper-scoring term alone, the `q_ref_initial` column and its Phase 1 precomputation are dropped, and a group whose reference-side distributions all fail to parse drops its training rows (`no_reference_target`, the analog of RMCT's `no_reference_rate`). | "No anchor for now" — same status as the RMCT port's unsupported `anchor_weight`. Cost: co-drift to a matched-but-shifted distribution is no longer structurally blocked; monitored via the KL term, entropy/calibration diagnostics, and the control arm. |
 | V3 | **A side with no parsed answer rollouts omits the log-score term for that step** (counted in `vdct/sides_missing_answer_samples`). | Preferable to inventing pseudo-answers; the JS term still trains. |
 | V4 | **Rollout dumps carry the VDCT per-row fields** (parsed distributions, answers, rewards, advantages, targets) via a `_log_rollout_data` override — the RMCT port's known dump gap is fixed for this recipe. | The plan requires parsed distributions in dumps for diagnostics. In verl `2b0fe51`'s `fit()`, the dump runs after `_update_actor` on the same batch, so the stashed per-row results are aligned. |
 | V5 | **Dataset sourcing switched to the c-wei/AttCT assets** (2026-08-22 user decision) rather than generating LogiQA+HellaSwag wrong-argument pairs. The mcq-bias paths remain supported. | Non-RL side of the project standardizes on that repo; its 4,000-prompt sycophancy_bct pool replaces the plan's Phase 1 step 3 generation. |

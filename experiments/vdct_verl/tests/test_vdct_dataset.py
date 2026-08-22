@@ -1,5 +1,5 @@
 """Tests for the VDCT parquet builder: schema, row structure, control mode,
-frozen-artifact refusals, anchor validation, and both input formats."""
+frozen-artifact refusals, and both input formats."""
 
 import importlib.util
 import json
@@ -35,10 +35,6 @@ def native_row(idx: int) -> dict:
     }
 
 
-def anchor_row(idx: int) -> dict:
-    return {"question_id": f"q{idx}", "option_labels": LABELS, "q_ref_initial": [0.5, 0.3, 0.2]}
-
-
 def write_jsonl(path: Path, rows: list[dict]) -> Path:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     return path
@@ -47,12 +43,11 @@ def write_jsonl(path: Path, rows: list[dict]) -> Path:
 @pytest.fixture
 def inputs(tmp_path):
     pairs = write_jsonl(tmp_path / "pairs.jsonl", [native_row(0), native_row(1)])
-    anchors = write_jsonl(tmp_path / "anchors.jsonl", [anchor_row(0), anchor_row(1)])
-    return pairs, anchors, tmp_path / "out.parquet"
+    return pairs, tmp_path / "out.parquet"
 
 
-def run_builder(pairs, anchors, output, *extra):
-    builder.main(["--input", str(pairs), "--anchors", str(anchors), "--output", str(output), *extra])
+def run_builder(pairs, output, *extra):
+    builder.main(["--input", str(pairs), "--output", str(output), *extra])
     return pd.read_parquet(output)
 
 
@@ -70,7 +65,6 @@ def test_four_rows_per_datapoint_with_expected_columns(inputs):
         }
         for _, row in group.iterrows():
             assert list(row["option_labels"]) == LABELS
-            assert list(row["q_ref_initial"]) == pytest.approx([0.5, 0.3, 0.2])
 
 
 def test_distribution_rows_carry_the_elicitation_instruction(inputs):
@@ -89,41 +83,18 @@ def test_distribution_rows_carry_the_elicitation_instruction(inputs):
 
 
 def test_control_mode_uses_the_unbiased_prompt_everywhere(inputs):
-    pairs, anchors, output = inputs
-    frame = run_builder(pairs, anchors, output, "--control")
+    pairs, output = inputs
+    frame = run_builder(pairs, output, "--control")
     for _, row in frame.iterrows():
         assert "I think it's B." not in row["prompt"][0]["content"]
 
 
 def test_existing_output_is_refused_without_force(inputs):
-    pairs, anchors, output = inputs
-    run_builder(pairs, anchors, output)
+    pairs, output = inputs
+    run_builder(pairs, output)
     with pytest.raises(SystemExit, match="exists"):
-        builder.main(["--input", str(pairs), "--anchors", str(anchors), "--output", str(output)])
-    run_builder(pairs, anchors, output, "--force")  # explicit overwrite works
-
-
-def test_missing_anchor_coverage_is_an_error(tmp_path):
-    pairs = write_jsonl(tmp_path / "pairs.jsonl", [native_row(0), native_row(1)])
-    anchors = write_jsonl(tmp_path / "anchors.jsonl", [anchor_row(0)])  # q1 missing
-    with pytest.raises(ValueError, match="anchor coverage"):
-        builder.main(["--input", str(pairs), "--anchors", str(anchors), "--output", str(tmp_path / "o.parquet")])
-
-
-def test_anchor_label_mismatch_is_an_error(tmp_path):
-    pairs = write_jsonl(tmp_path / "pairs.jsonl", [native_row(0)])
-    bad = anchor_row(0) | {"option_labels": ["A", "B", "D"]}
-    anchors = write_jsonl(tmp_path / "anchors.jsonl", [bad])
-    with pytest.raises(ValueError, match="option_labels mismatch"):
-        builder.main(["--input", str(pairs), "--anchors", str(anchors), "--output", str(tmp_path / "o.parquet")])
-
-
-def test_non_distribution_anchor_is_an_error(tmp_path):
-    pairs = write_jsonl(tmp_path / "pairs.jsonl", [native_row(0)])
-    bad = anchor_row(0) | {"q_ref_initial": [0.9, 0.3, 0.2]}
-    anchors = write_jsonl(tmp_path / "anchors.jsonl", [bad])
-    with pytest.raises(ValueError, match="not a distribution"):
-        builder.main(["--input", str(pairs), "--anchors", str(anchors), "--output", str(tmp_path / "o.parquet")])
+        builder.main(["--input", str(pairs), "--output", str(output)])
+    run_builder(pairs, output, "--force")  # explicit overwrite works
 
 
 def test_prompt_pairs_input_format(tmp_path):
@@ -143,20 +114,8 @@ def test_prompt_pairs_input_format(tmp_path):
         }
     ]
     pairs = write_jsonl(tmp_path / "pairs.jsonl", pair_rows)
-    anchors = write_jsonl(tmp_path / "anchors.jsonl", [anchor_row(0)])
     output = tmp_path / "out.parquet"
-    builder.main(
-        [
-            "--input",
-            str(pairs),
-            "--input-format",
-            "prompt_pairs",
-            "--anchors",
-            str(anchors),
-            "--output",
-            str(output),
-        ]
-    )
+    builder.main(["--input", str(pairs), "--input-format", "prompt_pairs", "--output", str(output)])
     frame = pd.read_parquet(output)
     assert len(frame) == 4
     row = frame[(frame["variant"] == "training") & (frame["kind"] == "answer")].iloc[0]
@@ -176,17 +135,5 @@ def test_prompt_pairs_metadata_must_carry_the_parser_contract(tmp_path):
         }
     ]
     pairs = write_jsonl(tmp_path / "pairs.jsonl", pair_rows)
-    anchors = write_jsonl(tmp_path / "anchors.jsonl", [anchor_row(0)])
     with pytest.raises(ValueError, match="valid_labels"):
-        builder.main(
-            [
-                "--input",
-                str(pairs),
-                "--input-format",
-                "prompt_pairs",
-                "--anchors",
-                str(anchors),
-                "--output",
-                str(tmp_path / "o.parquet"),
-            ]
-        )
+        builder.main(["--input", str(pairs), "--input-format", "prompt_pairs", "--output", str(tmp_path / "o.parquet")])

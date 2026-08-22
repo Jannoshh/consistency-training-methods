@@ -46,7 +46,6 @@ _DUMP_BATCH_FIELDS = (
     "trait",
     "option_labels",
     "biased_option",
-    "q_ref_initial",
     "response_truncated",
 )
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a paired-prompt JSONL plus frozen anchors into the VDCT verl parquet.
+"""Convert a paired-prompt JSONL into the VDCT verl parquet.
 
 Input 1 — the paired-prompt artifact, in either supported schema
 (``--input-format``):
@@ -14,11 +14,6 @@ Input 1 — the paired-prompt artifact, in either supported schema
   view (``source_id``→``question_id``, ``reference_messages``→
   ``unbiased_messages``, ``variant_messages``→``biased_messages``,
   ``metadata.valid_labels``→``option_labels``, etc.).
-
-Input 2 — the frozen initial-anchor artifact (``--anchors``), one JSON object
-per line: ``question_id``, ``option_labels``, ``q_ref_initial`` (the base
-model's mean stated distribution on the REFERENCE prompt, precomputed once in
-Phase 1 step 7). Coverage must be 100%; option orders must match.
 
 Output: one parquet with FOUR rows per datapoint sharing a ``group_id`` —
 ``variant ∈ {reference, training}`` × ``kind ∈ {distribution, answer}``:
@@ -46,8 +41,7 @@ out of the uniform rollout.n.
 Usage
 -----
     uv run --no-sync python experiments/vdct_verl/scripts/make_vdct_dataset.py \
-        --input pairs.jsonl --anchors anchors.jsonl \
-        --output /workspace/vdct/data/vdct_rows.parquet
+        --input pairs.jsonl --output /workspace/vdct/data/vdct_rows.parquet
 """
 
 from __future__ import annotations
@@ -69,7 +63,6 @@ from recipe.vdct.vdct_elicitation import elicitation_instruction
 REQUIRED = {"question_id", "unbiased_messages", "biased_messages", "biased_option", "option_labels"}
 PAIR_REQUIRED = {"source_id", "reference_messages", "variant_messages", "metadata"}
 PAIR_METADATA_REQUIRED = {"biased_option", "valid_labels"}
-ANCHOR_REQUIRED = {"question_id", "option_labels", "q_ref_initial"}
 INPUT_FORMATS = ("native", "prompt_pairs")
 REFERENCE_VARIANT = "reference"
 TRAINING_VARIANT = "training"
@@ -125,35 +118,6 @@ def load_rows(path: Path, n_datapoints: int | None, input_format: str = "native"
     return rows
 
 
-def load_anchors(path: Path) -> dict[str, dict]:
-    anchors: dict[str, dict] = {}
-    for row in _read_jsonl(path, ANCHOR_REQUIRED):
-        question_id = str(row["question_id"])
-        if question_id in anchors:
-            raise ValueError(f"{path}: duplicate anchor for question_id {question_id!r}")
-        anchors[question_id] = row
-    return anchors
-
-
-def resolve_anchor(row: dict, anchors: dict[str, dict]) -> list[float]:
-    """The frozen ``q_ref_initial`` for one datapoint, validated against it."""
-    question_id = str(row["question_id"])
-    anchor = anchors.get(question_id)
-    if anchor is None:
-        raise ValueError(f"no anchor for question_id {question_id!r}; anchor coverage must be 100%")
-    if list(anchor["option_labels"]) != list(row["option_labels"]):
-        raise ValueError(
-            f"anchor option_labels mismatch for {question_id!r}: "
-            f"{anchor['option_labels']} vs {row['option_labels']}"
-        )
-    q = [float(v) for v in anchor["q_ref_initial"]]
-    if len(q) != len(row["option_labels"]):
-        raise ValueError(f"anchor length mismatch for {question_id!r}")
-    if any(v < 0.0 for v in q) or abs(sum(q) - 1.0) > 1e-6:
-        raise ValueError(f"anchor for {question_id!r} is not a distribution: {q}")
-    return q
-
-
 def with_elicitation(messages: list[dict], option_labels: list[str]) -> list[dict]:
     """Append the elicitation instruction to the last user message."""
     messages = copy.deepcopy(messages)
@@ -164,12 +128,11 @@ def with_elicitation(messages: list[dict], option_labels: list[str]) -> list[dic
     raise ValueError("prompt has no user message to carry the elicitation instruction")
 
 
-def build_records(rows: list[dict], anchors: dict[str, dict], data_source: str, control: bool) -> list[dict]:
+def build_records(rows: list[dict], data_source: str, control: bool) -> list[dict]:
     records: list[dict] = []
     for index, row in enumerate(rows):
         group_id = str(row["question_id"])
         option_labels = [str(label) for label in row["option_labels"]]
-        q_ref_initial = resolve_anchor(row, anchors)
         for variant in (REFERENCE_VARIANT, TRAINING_VARIANT):
             if variant == REFERENCE_VARIANT or control:
                 base_messages = row["unbiased_messages"]
@@ -190,7 +153,6 @@ def build_records(rows: list[dict], anchors: dict[str, dict], data_source: str, 
                         "kind": kind,
                         "biased_option": row["biased_option"],
                         "option_labels": option_labels,
-                        "q_ref_initial": q_ref_initial,
                         "question_id": row["question_id"],
                         "ground_truth": row.get("ground_truth", ""),
                         "source_dataset": row.get("source_dataset", ""),
@@ -212,7 +174,6 @@ def main(argv: list[str] | None = None) -> None:
         default="native",
         help="native mcq-bias rows or the shared ctm.prompt_pairs schema",
     )
-    parser.add_argument("--anchors", required=True, type=Path, help="frozen q_ref_initial JSONL (Phase 1 step 7)")
     parser.add_argument("--output", required=True, type=Path, help="destination .parquet")
     parser.add_argument("--n-datapoints", type=int, default=None, help="take the first N rows (frozen selection)")
     parser.add_argument("--data-source", default="vdct", help="verl data_source tag")
@@ -224,8 +185,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"{args.output} exists; pass --force to overwrite")
 
     rows = load_rows(args.input, args.n_datapoints, args.input_format)
-    anchors = load_anchors(args.anchors)
-    records = build_records(rows, anchors, args.data_source, args.control)
+    records = build_records(rows, args.data_source, args.control)
     assert len(records) == 4 * len(rows)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(records).to_parquet(args.output, index=False)

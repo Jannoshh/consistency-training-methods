@@ -85,7 +85,6 @@ class VDCTAgentLoop(AgentLoopBase):
         group_id = str(kwargs["group_id"])
         biased_option = str(kwargs["biased_option"])
         option_labels = [str(label) for label in kwargs["option_labels"]]
-        q_ref_initial = [float(v) for v in kwargs["q_ref_initial"]]
         if variant not in (REFERENCE_VARIANT, TRAINING_VARIANT):
             raise ValueError(f"unknown VDCT variant {variant!r}")
         if kind not in (DISTRIBUTION_KIND, ANSWER_KIND):
@@ -150,7 +149,6 @@ class VDCTAgentLoop(AgentLoopBase):
                 "trait": trait,
                 "option_labels": option_labels,
                 "biased_option": biased_option,
-                "q_ref_initial": q_ref_initial,
                 "response_truncated": truncated,
                 "turn_scores": [],
                 "tool_rewards": [],
