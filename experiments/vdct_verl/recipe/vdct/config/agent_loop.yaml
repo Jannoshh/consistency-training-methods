@@ -1,0 +1,7 @@
+# Registers the VDCT agent loop in every AgentLoopWorker Ray actor without
+# relying on an import side effect. Referenced by
+# actor_rollout_ref.rollout.agent.agent_loop_config_path.
+# Both row kinds (distribution and answer) route here; the loop dispatches on
+# the row's `kind` column (README deviation V1).
+- name: vdct
+  _target_: recipe.vdct.vdct_agent_loop.VDCTAgentLoop

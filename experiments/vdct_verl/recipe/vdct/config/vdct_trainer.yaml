@@ -1,0 +1,79 @@
+# VDCT hydra overlay on verl's ppo_trainer config (verl @ 2b0fe51).
+#
+# The searchpath is relative to the process CWD, so launch from the verl clone
+# root (see README) or replace it with an absolute file:// path.
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# ── VDCT block, read by RayVDCTTrainer ───────────────────────────────────────
+vdct:
+  # KL vs the frozen base, tinker semantics (batch-centered, per token) —
+  # reused from the RMCT recipe at its RMCT default. 0.0 disables the term.
+  kl_coef: 0.05
+  # Which log-probs stand in for log pi_theta in the KL term (see the RMCT
+  # README, deviation V2).
+  #   old_log_probs     — verl's recomputed actor log-probs (default here)
+  #   rollout_log_probs — the sampler's own log-probs; needs
+  #                       actor_rollout_ref.rollout.calculate_log_probs=True
+  kl_logprob_source: old_log_probs
+  # Proper-scoring weight lambda. Default 1.0; the Phase 3 smoke sweeps
+  # {0.3, 1.0, 3.0}. 0.0 is the no-proper-scoring ablation arm.
+  lambda_log_score: 1.0
+  # Floor inside the log score and the worst-case (unparseable) reward.
+  epsilon: 0.001
+  # Advantage standardization over each (datapoint, side) 8-rollout
+  # distribution population — slime_port.advantages.normalize_grouped
+  # semantics. per_item | pooled.
+  normalization: per_item
+
+# ── verl switches VDCT depends on ────────────────────────────────────────────
+algorithm:
+  # verl's GRPO advantages are computed and then overwritten by
+  # RayVDCTTrainer._update_actor. adv_estimator only has to be something whose
+  # advantage pass does not crash on all-zero rewards.
+  adv_estimator: grpo
+  # VDCT owns the KL term; both of verl's KL paths must stay off.
+  use_kl_in_reward: False
+
+actor_rollout_ref:
+  actor:
+    use_kl_loss: False
+  rollout:
+    # One 8-rollout population per (datapoint, variant, kind) row — uniform
+    # across all four rows of a datapoint (verl constraint), so M answer
+    # samples = 8 falls out of it.
+    n: 8
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    mode: async
+    agent:
+      agent_loop_config_path: recipe/vdct/config/agent_loop.yaml
+
+data:
+  # The agent loop reads kwargs["raw_prompt"], built from this column.
+  prompt_key: prompt
+  return_raw_chat: True
+  shuffle: False
+  # Do not inherit RMCT's 20,480-token ceiling; distribution/answer responses
+  # are far shorter. Start at 8,192 (plan), fix in the smoke.
+  max_response_length: 8192
+
+trainer:
+  # VDCT overrides the V0 RayPPOTrainer._update_actor. verl's default is
+  # use_v1: true, which routes to the TransferQueue trainer in
+  # verl/trainer/ppo/v1/ and would silently ignore this recipe's trainer.
+  use_v1: False
+  project_name: vdct_verl
+  # Per-step persistence of every sampled response. The VDCT trainer threads
+  # parsed distributions/answers/rewards into this dump (unlike the RMCT
+  # recipe's known gap), so diagnostics can run from it.
+  rollout_data_dir: null
+  balance_batch: False
+  val_before_train: False
+  test_freq: -1
